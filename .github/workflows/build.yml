@@ -23,7 +23,7 @@ jobs:
       run: dotnet restore
 
     - name: Embed version info
-      run: echo "${{ github.sha }}" > ConfusedPolarBear.Plugin.IntroSkipper/Configuration/version.txt
+      run: echo "${{ github.sha }}" > Jellyfin.Plugin.SegmentRecognition/Configuration/version.txt
 
     - name: Build
       run: dotnet build --no-restore
@@ -32,5 +32,5 @@ jobs:
       uses: actions/upload-artifact@v3.1.2
       with:
         name: intro-skipper-${{ github.sha }}.dll
-        path: ConfusedPolarBear.Plugin.IntroSkipper/bin/Debug/net6.0/ConfusedPolarBear.Plugin.IntroSkipper.dll
+        path: Jellyfin.Plugin.SegmentRecognition/bin/Debug/net6.0/Jellyfin.Plugin.SegmentRecognition.dll
         if-no-files-found: error

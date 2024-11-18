@@ -1,0 +1,22 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+#
+Project("{F9C6800D-6E97-42EA-953A-DC20E0591DE8}") = "Jellyfin.Plugin.SegmentRecognition", "Jellyfin.Plugin.SegmentRecognition\Jellyfin.Plugin.SegmentRecognition.csproj", "{F50D2F91-12AB-499D-8079-4AA77DC4DF33}"
+EndProject
+Project("{F9C6800D-6E97-42EA-953A-DC20E0591DE8}") = "Jellyfin.Plugin.SegmentRecognition.Tests", "Jellyfin.Plugin.SegmentRecognition.Tests\Jellyfin.Plugin.SegmentRecognition.Tests.csproj", "{49632752-34C0-4403-8759-9DD2703B47D0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F50D2F91-12AB-499D-8079-4AA77DC4DF33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F50D2F91-12AB-499D-8079-4AA77DC4DF33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F50D2F91-12AB-499D-8079-4AA77DC4DF33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F50D2F91-12AB-499D-8079-4AA77DC4DF33}.Release|Any CPU.Build.0 = Release|Any CPU
+		{49632752-34C0-4403-8759-9DD2703B47D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{49632752-34C0-4403-8759-9DD2703B47D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{49632752-34C0-4403-8759-9DD2703B47D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{49632752-34C0-4403-8759-9DD2703B47D0}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

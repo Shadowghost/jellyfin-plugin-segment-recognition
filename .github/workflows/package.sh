@@ -12,7 +12,7 @@ zip="intro-skipper-$version.zip"
 short="$(echo "$version" | sed "s/^v//")"
 
 # Get the assembly version
-CSPROJ="ConfusedPolarBear.Plugin.IntroSkipper/ConfusedPolarBear.Plugin.IntroSkipper.csproj"
+CSPROJ="Jellyfin.Plugin.SegmentRecognition/Jellyfin.Plugin.SegmentRecognition.csproj"
 assemblyVersion="$(grep -m1 -oE "([0-9]\.){3}[0-9]" "$CSPROJ")"
 
 # Get the date
@@ -36,8 +36,8 @@ mkdir package
 cd package || exit 1
 
 # Copy the freshly built plugin DLL to the packaging directory and archive
-cp "../ConfusedPolarBear.Plugin.IntroSkipper/bin/Release/net6.0/ConfusedPolarBear.Plugin.IntroSkipper.dll" ./ || exit 1
-zip "$zip" ConfusedPolarBear.Plugin.IntroSkipper.dll || exit 1
+cp "../Jellyfin.Plugin.SegmentRecognition/bin/Release/net6.0/Jellyfin.Plugin.SegmentRecognition.dll" ./ || exit 1
+zip "$zip" Jellyfin.Plugin.SegmentRecognition.dll || exit 1
 
 # Calculate the checksum of the archive
 checksum="$(md5sum "$zip" | cut -f 1 -d " ")"
