@@ -2,8 +2,14 @@ namespace Jellyfin.Plugin.SegmentRecognition.Tests;
 
 using Xunit;
 
+/// <summary>
+/// Tests warnings.
+/// </summary>
 public class TestFlags
 {
+    /// <summary>
+    /// Tests empty flag serialization.
+    /// </summary>
     [Fact]
     public void TestEmptyFlagSerialization()
     {
@@ -11,6 +17,9 @@ public class TestFlags
         Assert.Equal("None", WarningManager.GetWarnings());
     }
 
+    /// <summary>
+    /// Tests single flag serialization.
+    /// </summary>
     [Fact]
     public void TestSingleFlagSerialization()
     {
@@ -19,6 +28,9 @@ public class TestFlags
         Assert.Equal("UnableToAddSkipButton", WarningManager.GetWarnings());
     }
 
+    /// <summary>
+    /// Tests double flag serialization.
+    /// </summary>
     [Fact]
     public void TestDoubleFlagSerialization()
     {

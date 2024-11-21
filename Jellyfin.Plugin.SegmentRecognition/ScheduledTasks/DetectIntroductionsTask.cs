@@ -80,13 +80,13 @@ public class DetectIntroductionsTask : IScheduledTask
     /// <returns>Task triggers.</returns>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        return new[]
-        {
+        return
+        [
             new TaskTriggerInfo
             {
                 Type = TaskTriggerInfo.TriggerDaily,
                 TimeOfDayTicks = TimeSpan.FromHours(0).Ticks
             }
-        };
+        ];
     }
 }

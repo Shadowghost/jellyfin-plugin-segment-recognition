@@ -46,60 +46,6 @@
                             </div>
                         </div>
 
-                        <details id="edl">
-                            <summary>EDL file generation</summary>
-
-                            <div class="selectContainer">
-                                <label class="selectLabel" for="EdlAction">EDL Action</label>
-                                <select is="emby-select" id="EdlAction" class="emby-select-withcolor emby-select">
-                                    <option value="None">
-                                        None (do not create or modify EDL files)
-                                    </option>
-
-                                    <option value="CommercialBreak">
-                                        Commercial Break (recommended, skips past the intro once)
-                                    </option>
-
-                                    <option value="Cut">
-                                        Cut (player will remove the intro from the video)
-                                    </option>
-
-                                    <option value="Intro">
-                                        Intro (show a skip button, *experimental*)
-                                    </option>
-
-                                    <option value="Mute">
-                                        Mute (audio will be muted)
-                                    </option>
-
-                                    <option value="SceneMarker">
-                                        Scene Marker (create a chapter marker)
-                                    </option>
-                                </select>
-
-                                <div class="fieldDescription">
-                                    If set to a value other than None, specifies which action to write to
-                                    <a href="https://kodi.wiki/view/Edit_decision_list">MPlayer compatible EDL files</a>
-                                    alongside your episode files. <br />
-
-                                    If this value is changed after EDL files are generated, you must check the
-                                    "Regenerate EDL files" checkbox below.
-                                </div>
-                            </div>
-
-                            <div class="checkboxContainer checkboxContainer-withDescription">
-                                <label class="emby-checkbox-label">
-                                    <input id="RegenerateEdlFiles" type="checkbox" is="emby-checkbox" />
-                                    <span>Regenerate EDL files during next scan</span>
-                                </label>
-
-                                <div class="fieldDescription">
-                                    If checked, the plugin will <strong>overwrite all EDL files</strong> associated with
-                                    your episodes with the currently discovered introduction timestamps and EDL action.
-                                </div>
-                            </div>
-                        </details>
-
                         <details id="intro_reqs">
                             <summary>Modify introduction requirements</summary>
 

@@ -1,13 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Entities;
-using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Entities;
@@ -24,12 +22,12 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     private readonly object _serializationLock = new();
     private readonly object _introsLock = new();
-    private IXmlSerializer _xmlSerializer;
-    private ILibraryManager _libraryManager;
-    private IItemRepository _itemRepository;
-    private ILogger<Plugin> _logger;
-    private string _introPath;
-    private string _creditsPath;
+    private readonly IXmlSerializer _xmlSerializer;
+    private readonly ILibraryManager _libraryManager;
+    private readonly IItemRepository _itemRepository;
+    private readonly ILogger<Plugin> _logger;
+    private readonly string _introPath;
+    private readonly string _creditsPath;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Plugin"/> class.
@@ -80,35 +78,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             _logger.LogWarning("Unable to load introduction timestamps: {Exception}", ex);
         }
-
-        // Inject the skip intro button code into the web interface.
-        var indexPath = Path.Join(applicationPaths.WebPath, "index.html");
-        try
-        {
-            InjectSkipButton(indexPath, Path.Join(introsDirectory, "index-pre-skip-button.html"));
-        }
-        catch (Exception ex)
-        {
-            WarningManager.SetFlag(PluginWarning.UnableToAddSkipButton);
-
-            if (ex is UnauthorizedAccessException)
-            {
-                var suggestion = OperatingSystem.IsLinux() ?
-                    "running `sudo chown jellyfin PATH` (if this is a native installation)" :
-                    "changing the permissions of PATH";
-
-                suggestion = suggestion.Replace("PATH", indexPath, StringComparison.Ordinal);
-
-                _logger.LogError(
-                    "Failed to add skip button to web interface. Try {Suggestion} and restarting the server. Error: {Error}",
-                    suggestion,
-                    ex);
-            }
-            else
-            {
-                _logger.LogError("Unknown error encountered while adding skip button: {Error}", ex);
-            }
-        }
     }
 
     /// <summary>
@@ -119,17 +88,17 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <summary>
     /// Gets the results of fingerprinting all episodes.
     /// </summary>
-    public Dictionary<Guid, Intro> Intros { get; } = new();
+    public Dictionary<Guid, Intro> Intros { get; } = [];
 
     /// <summary>
     /// Gets all discovered ending credits.
     /// </summary>
-    public Dictionary<Guid, Intro> Credits { get; } = new();
+    public Dictionary<Guid, Intro> Credits { get; } = [];
 
     /// <summary>
     /// Gets the most recent media item queue.
     /// </summary>
-    public Dictionary<Guid, List<QueuedEpisode>> QueuedMediaItems { get; } = new();
+    public Dictionary<Guid, List<QueuedEpisode>> QueuedMediaItems { get; } = [];
 
     /// <summary>
     /// Gets or sets the total number of episodes in the queue.
@@ -225,24 +194,19 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
-        return new[]
-        {
+        return
+        [
             new PluginPageInfo
             {
-                Name = this.Name,
+                Name = Name,
                 EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
             },
             new PluginPageInfo
             {
                 Name = "visualizer.js",
                 EmbeddedResourcePath = GetType().Namespace + ".Configuration.visualizer.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "skip-intro-button.js",
-                EmbeddedResourcePath = GetType().Namespace + ".Configuration.inject.js"
             }
-        };
+        ];
     }
 
     /// <summary>
@@ -274,7 +238,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         return commit;
     }
 
-    internal BaseItem GetItem(Guid id)
+    internal BaseItem? GetItem(Guid id)
     {
         return _libraryManager.GetItemById(id);
     }
@@ -284,9 +248,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </summary>
     /// <param name="id">Item id.</param>
     /// <returns>Full path to item.</returns>
-    internal string GetItemPath(Guid id)
+    internal string? GetItemPath(Guid id)
     {
-        return GetItem(id).Path;
+        return GetItem(id)?.Path;
     }
 
     /// <summary>
@@ -322,47 +286,5 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     private void OnConfigurationChanged(object? sender, BasePluginConfiguration e)
     {
         AutoSkipChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>
-    /// Inject the skip button script into the web interface.
-    /// </summary>
-    /// <param name="indexPath">Full path to index.html.</param>
-    /// <param name="backupPath">Full path to create a backup of index.html at.</param>
-    private void InjectSkipButton(string indexPath, string backupPath)
-    {
-        // Parts of this code are based off of JellyScrub's script injection code.
-        // https://github.com/nicknsy/jellyscrub/blob/4ce806f602988a662cfe3cdbaac35ee8046b7ec4/Nick.Plugin.Jellyscrub/JellyscrubPlugin.cs
-
-        _logger.LogInformation("Adding skip button to {Path}", indexPath);
-
-        _logger.LogDebug("Reading index.html from {Path}", indexPath);
-        var contents = File.ReadAllText(indexPath);
-        _logger.LogDebug("Successfully read index.html");
-
-        var scriptTag = "<script src=\"configurationpage?name=skip-intro-button.js\"></script>";
-
-        // Only inject the script tag once
-        if (contents.Contains(scriptTag, StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation("Skip button already added");
-            return;
-        }
-
-        // Backup the original version of the web interface
-        _logger.LogInformation("Backing up index.html to {Backup}", backupPath);
-        File.WriteAllText(backupPath, contents);
-
-        // Inject a link to the script at the end of the <head> section.
-        // A regex is used here to ensure the replacement is only done once.
-        _logger.LogDebug("Injecting script tag");
-        var headEnd = new Regex("</head>", RegexOptions.IgnoreCase);
-        contents = headEnd.Replace(contents, scriptTag + "</head>", 1);
-
-        // Write the modified file contents
-        _logger.LogDebug("Saving modified file");
-        File.WriteAllText(indexPath, contents);
-
-        _logger.LogInformation("Skip intro button successfully added to web interface");
     }
 }

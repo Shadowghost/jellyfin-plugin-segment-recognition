@@ -5,10 +5,10 @@ using System.Threading.Tasks;
 using System.Timers;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Session;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SegmentRecognition;
@@ -17,15 +17,15 @@ namespace Jellyfin.Plugin.SegmentRecognition;
 /// Automatically skip past introduction sequences.
 /// Commands clients to seek to the end of the intro as soon as they start playing it.
 /// </summary>
-public class AutoSkip : IServerEntryPoint
+public class AutoSkip : IHostedService, IDisposable
 {
     private readonly object _sentSeekCommandLock = new();
 
-    private ILogger<AutoSkip> _logger;
-    private IUserDataManager _userDataManager;
-    private ISessionManager _sessionManager;
-    private System.Timers.Timer _playbackTimer = new(1000);
-    private Dictionary<string, bool> _sentSeekCommand;
+    private readonly ILogger<AutoSkip> _logger;
+    private readonly IUserDataManager _userDataManager;
+    private readonly ISessionManager _sessionManager;
+    private readonly System.Timers.Timer _playbackTimer = new(1000);
+    private readonly Dictionary<string, bool> _sentSeekCommand;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoSkip"/> class.
@@ -41,7 +41,7 @@ public class AutoSkip : IServerEntryPoint
         _userDataManager = userDataManager;
         _sessionManager = sessionManager;
         _logger = logger;
-        _sentSeekCommand = new Dictionary<string, bool>();
+        _sentSeekCommand = [];
     }
 
     /// <summary>
@@ -202,9 +202,22 @@ public class AutoSkip : IServerEntryPoint
         }
     }
 
-    /// <summary>
-    /// Dispose.
-    /// </summary>
+    /// <inheritdoc />
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        _userDataManager.UserDataSaved -= UserDataManager_UserDataSaved;
+        _playbackTimer.Stop();
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public void Dispose()
     {
         Dispose(true);
@@ -222,8 +235,6 @@ public class AutoSkip : IServerEntryPoint
             return;
         }
 
-        _userDataManager.UserDataSaved -= UserDataManager_UserDataSaved;
-        _playbackTimer.Stop();
         _playbackTimer.Dispose();
     }
 }

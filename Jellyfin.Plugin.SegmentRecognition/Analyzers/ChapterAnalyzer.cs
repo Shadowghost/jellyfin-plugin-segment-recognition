@@ -7,15 +7,15 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
-using Microsoft.Extensions.Logging;
 using MediaBrowser.Model.Entities;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Chapter name analyzer.
 /// </summary>
 public class ChapterAnalyzer : IMediaFileAnalyzer
 {
-    private ILogger<ChapterAnalyzer> _logger;
+    private readonly ILogger<ChapterAnalyzer> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChapterAnalyzer"/> class.
@@ -52,7 +52,7 @@ public class ChapterAnalyzer : IMediaFileAnalyzer
 
             var skipRange = FindMatchingChapter(
                 episode,
-                new(Plugin.Instance!.GetChapters(episode.EpisodeId)),
+                [.. Plugin.Instance!.GetChapters(episode.EpisodeId)],
                 expression,
                 mode);
 

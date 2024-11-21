@@ -63,7 +63,7 @@ public class VisualizationController : ControllerBase
             }
 
             // TryAdd is used when adding the HashSet since it is a no-op if one was already created for this series.
-            showSeasons.TryAdd(series, new HashSet<string>());
+            showSeasons.TryAdd(series, []);
             showSeasons[series].Add(season);
         }
 
@@ -195,7 +195,7 @@ public class VisualizationController : ControllerBase
             return true;
         }
 
-        episodes = new List<QueuedEpisode>();
+        episodes = [];
         return false;
     }
 }

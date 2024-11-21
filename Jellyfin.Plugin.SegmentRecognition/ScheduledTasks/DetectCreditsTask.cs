@@ -81,6 +81,6 @@ public class DetectCreditsTask : IScheduledTask
     /// <returns>Task triggers.</returns>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        return Array.Empty<TaskTriggerInfo>();
+        return [];
     }
 }

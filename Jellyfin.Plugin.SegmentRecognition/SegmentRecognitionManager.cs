@@ -1,8 +1,8 @@
 using System;
-using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Plugins;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SegmentRecognition;
@@ -10,31 +10,23 @@ namespace Jellyfin.Plugin.SegmentRecognition;
 /// <summary>
 /// Server entrypoint.
 /// </summary>
-public class Entrypoint : IServerEntryPoint
+public class SegmentRecognitionManager : IHostedService
 {
-    private readonly IUserManager _userManager;
-    private readonly IUserViewManager _userViewManager;
     private readonly ILibraryManager _libraryManager;
-    private readonly ILogger<Entrypoint> _logger;
+    private readonly ILogger<SegmentRecognitionManager> _logger;
     private readonly ILoggerFactory _loggerFactory;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Entrypoint"/> class.
+    /// Initializes a new instance of the <see cref="SegmentRecognitionManager"/> class.
     /// </summary>
-    /// <param name="userManager">User manager.</param>
-    /// <param name="userViewManager">User view manager.</param>
     /// <param name="libraryManager">Library manager.</param>
     /// <param name="logger">Logger.</param>
     /// <param name="loggerFactory">Logger factory.</param>
-    public Entrypoint(
-        IUserManager userManager,
-        IUserViewManager userViewManager,
+    public SegmentRecognitionManager(
         ILibraryManager libraryManager,
-        ILogger<Entrypoint> logger,
+        ILogger<SegmentRecognitionManager> logger,
         ILoggerFactory loggerFactory)
     {
-        _userManager = userManager;
-        _userViewManager = userViewManager;
         _libraryManager = libraryManager;
         _logger = logger;
         _loggerFactory = loggerFactory;
@@ -66,24 +58,15 @@ public class Entrypoint : IServerEntryPoint
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Dispose.
-    /// </summary>
-    public void Dispose()
+    /// <inheritdoc />
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        Dispose(true);
-        GC.SuppressFinalize(this);
+        return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Protected dispose.
-    /// </summary>
-    /// <param name="dispose">Dispose.</param>
-    protected virtual void Dispose(bool dispose)
+    /// <inheritdoc />
+    public Task StopAsync(CancellationToken cancellationToken)
     {
-        if (!dispose)
-        {
-            return;
-        }
+        return Task.CompletedTask;
     }
 }

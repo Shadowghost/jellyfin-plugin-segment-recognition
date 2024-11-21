@@ -2,8 +2,14 @@ using Xunit;
 
 namespace Jellyfin.Plugin.SegmentRecognition.Tests;
 
+/// <summary>
+/// Time range tests.
+/// </summary>
 public class TestTimeRanges
 {
+    /// <summary>
+    /// Tests small range.
+    /// </summary>
     [Fact]
     public void TestSmallRange()
     {
@@ -18,6 +24,9 @@ public class TestTimeRanges
         Assert.Equal(expected, actual);
     }
 
+    /// <summary>
+    /// Tests large range.
+    /// </summary>
     [Fact]
     public void TestLargeRange()
     {
@@ -34,6 +43,9 @@ public class TestTimeRanges
         Assert.Equal(expected, actual);
     }
 
+    /// <summary>
+    /// Tests Futurama example range.
+    /// </summary>
     [Fact]
     public void TestFuturama()
     {

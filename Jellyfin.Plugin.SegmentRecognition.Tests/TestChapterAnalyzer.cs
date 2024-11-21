@@ -1,14 +1,19 @@
 namespace Jellyfin.Plugin.SegmentRecognition.Tests;
 
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+/// <summary>
+/// Chapter analyzer tests.
+/// </summary>
 public class TestChapterAnalyzer
 {
+    /// <summary>
+    /// Tests introduction recognition.
+    /// </summary>
     [Theory]
     [InlineData("Opening")]
     [InlineData("OP")]
@@ -25,6 +30,9 @@ public class TestChapterAnalyzer
         Assert.Equal(90, introChapter.IntroEnd);
     }
 
+    /// <summary>
+    /// Tests end credits recognition.
+    /// </summary>
     [Theory]
     [InlineData("End Credits")]
     [InlineData("Ending")]
@@ -63,7 +71,7 @@ public class TestChapterAnalyzer
             CreateChapter(mode == AnalysisMode.Credits ? name : "Credits", 1890)
         };
 
-        return new(new List<ChapterInfo>(chapters));
+        return [.. chapters];
     }
 
     /// <summary>

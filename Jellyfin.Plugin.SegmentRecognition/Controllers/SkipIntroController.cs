@@ -135,7 +135,7 @@ public class SkipIntroController : ControllerBase
     public ActionResult<List<IntroWithMetadata>> GetAllTimestamps(
         [FromQuery] AnalysisMode mode = AnalysisMode.Introduction)
     {
-        List<IntroWithMetadata> intros = new();
+        List<IntroWithMetadata> intros = [];
 
         var timestamps = mode == AnalysisMode.Introduction ?
             Plugin.Instance!.Intros :

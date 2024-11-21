@@ -5,8 +5,14 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+/// <summary>
+/// Black frame detection tests.
+/// </summary>
 public class TestBlackFrames
 {
+    /// <summary>
+    /// Tests black frame detection.
+    /// </summary>
     [FactSkipFFmpegTests]
     public void TestBlackFrameDetection()
     {
@@ -27,6 +33,9 @@ public class TestBlackFrames
         }
     }
 
+    /// <summary>
+    /// Tests end credit detection.
+    /// </summary>
     [FactSkipFFmpegTests]
     public void TestEndCreditDetection()
     {

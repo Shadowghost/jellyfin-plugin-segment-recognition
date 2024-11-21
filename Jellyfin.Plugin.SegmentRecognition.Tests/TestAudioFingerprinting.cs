@@ -1,4 +1,5 @@
-/* These tests require that the host system has a version of FFmpeg installed
+/*
+ * These tests require that the host system has a version of FFmpeg installed
  * which supports both chromaprint and the "-fp_format raw" flag.
  */
 
@@ -9,14 +10,23 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SegmentRecognition.Tests;
 
+/// <summary>
+/// Audio fingerprinting tests.
+/// </summary>
 public class TestAudioFingerprinting
 {
+    /// <summary>
+    /// Tests if a suitable FFmpeg version is installed.
+    /// </summary>
     [FactSkipFFmpegTests]
     public void TestInstallationCheck()
     {
         Assert.True(FFmpegWrapper.CheckFFmpegVersion());
     }
 
+    /// <summary>
+    /// Tests Chromaprint bit counting.
+    /// </summary>
     [Theory]
     [InlineData(0, 0)]
     [InlineData(1, 1)]
@@ -26,10 +36,12 @@ public class TestAudioFingerprinting
     [InlineData(19, 2_465_585_877)]
     public void TestBitCounting(int expectedBits, uint number)
     {
-        var chromaprint = CreateChromaprintAnalyzer();
-        Assert.Equal(expectedBits, chromaprint.CountBits(number));
+        Assert.Equal(expectedBits, ChromaprintAnalyzer.CountBits(number));
     }
 
+    /// <summary>
+    /// Tests Chromaprint fingerprinting.
+    /// </summary>
     [FactSkipFFmpegTests]
     public void TestFingerprinting()
     {
@@ -66,6 +78,9 @@ public class TestAudioFingerprinting
         Assert.Equal(expected, actual);
     }
 
+    /// <summary>
+    /// Tests index generation.
+    /// </summary>
     [Fact]
     public void TestIndexGeneration()
     {
@@ -81,11 +96,16 @@ public class TestAudioFingerprinting
             {77, 5},
         };
 
-        var actual = FFmpegWrapper.CreateInvertedIndex(Guid.NewGuid(), fpr);
+        var chromaprintAnalyzer = CreateChromaprintAnalyzer();
+
+        var actual = chromaprintAnalyzer.CreateInvertedIndex(Guid.NewGuid(), fpr);
 
         Assert.Equal(expected, actual);
     }
 
+    /// <summary>
+    /// Tests intro detection.
+    /// </summary>
     [FactSkipFFmpegTests]
     public void TestIntroDetection()
     {
@@ -151,7 +171,10 @@ public class TestAudioFingerprinting
     }
 }
 
-public class FactSkipFFmpegTests : FactAttribute
+/// <summary>
+/// Fact attributes for skipping FFmpeg tests.
+/// </summary>
+public sealed class FactSkipFFmpegTests : FactAttribute
 {
 #if SKIP_FFMPEG_TESTS
     public FactSkipFFmpegTests() {

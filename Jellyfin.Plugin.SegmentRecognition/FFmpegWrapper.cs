@@ -14,8 +14,6 @@ namespace Jellyfin.Plugin.SegmentRecognition;
 /// </summary>
 public static class FFmpegWrapper
 {
-    private static readonly object InvertedIndexCacheLock = new();
-
     /// <summary>
     /// Used with FFmpeg's silencedetect filter to extract the start and end times of silence.
     /// </summary>
@@ -32,9 +30,9 @@ public static class FFmpegWrapper
     /// </summary>
     public static ILogger? Logger { get; set; }
 
-    private static Dictionary<string, string> ChromaprintLogs { get; set; } = new();
+    private static Dictionary<string, string> ChromaprintLogs { get; set; } = [];
 
-    private static Dictionary<Guid, Dictionary<uint, int>> InvertedIndexCache { get; set; } = new();
+    private static Dictionary<Guid, Dictionary<uint, int>> InvertedIndexCache { get; set; } = [];
 
     /// <summary>
     /// Check that the installed version of ffmpeg supports chromaprint.
@@ -130,41 +128,6 @@ public static class FFmpegWrapper
         }
 
         return Fingerprint(episode, mode, start, end);
-    }
-
-    /// <summary>
-    /// Transforms a Chromaprint into an inverted index of fingerprint points to the last index it appeared at.
-    /// </summary>
-    /// <param name="id">Episode ID.</param>
-    /// <param name="fingerprint">Chromaprint fingerprint.</param>
-    /// <returns>Inverted index.</returns>
-    public static Dictionary<uint, int> CreateInvertedIndex(Guid id, uint[] fingerprint)
-    {
-        lock (InvertedIndexCacheLock)
-        {
-            if (InvertedIndexCache.TryGetValue(id, out var cached))
-            {
-                return cached;
-            }
-        }
-
-        var invIndex = new Dictionary<uint, int>();
-
-        for (int i = 0; i < fingerprint.Length; i++)
-        {
-            // Get the current point.
-            var point = fingerprint[i];
-
-            // Append the current sample's timecode to the collection for this point.
-            invIndex[point] = i;
-        }
-
-        lock (InvertedIndexCacheLock)
-        {
-            InvertedIndexCache[id] = invIndex;
-        }
-
-        return invIndex;
     }
 
     /// <summary>
@@ -517,7 +480,7 @@ public static class FFmpegWrapper
         AnalysisMode mode,
         out uint[] fingerprint)
     {
-        fingerprint = Array.Empty<uint>();
+        fingerprint = [];
 
         // If fingerprint caching isn't enabled, don't try to load anything.
         if (!(Plugin.Instance?.Configuration.CacheFingerprints ?? false))

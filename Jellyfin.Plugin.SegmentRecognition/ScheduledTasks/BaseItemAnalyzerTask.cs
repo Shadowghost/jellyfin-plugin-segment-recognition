@@ -37,11 +37,6 @@ public class BaseItemAnalyzerTask
         _logger = logger;
         _loggerFactory = loggerFactory;
         _libraryManager = libraryManager;
-
-        if (mode == AnalysisMode.Introduction)
-        {
-            EdlManager.Initialize(_logger);
-        }
     }
 
     /// <summary>
@@ -71,11 +66,6 @@ public class BaseItemAnalyzerTask
                 "No episodes to analyze. If you are limiting the list of libraries to analyze, check that all library names have been spelled correctly.");
         }
 
-        if (this._analysisMode == AnalysisMode.Introduction)
-        {
-            EdlManager.LogConfiguration();
-        }
-
         var totalProcessed = 0;
         var options = new ParallelOptions()
         {
@@ -84,13 +74,11 @@ public class BaseItemAnalyzerTask
 
         Parallel.ForEach(queue, options, (season) =>
         {
-            var writeEdl = false;
-
             // Since the first run of the task can run for multiple hours, ensure that none
             // of the current media items were deleted from Jellyfin since the task was started.
             var (episodes, unanalyzed) = queueManager.VerifyQueue(
                 season.Value.AsReadOnly(),
-                this._analysisMode);
+                _analysisMode);
 
             if (episodes.Count == 0)
             {
@@ -118,8 +106,6 @@ public class BaseItemAnalyzerTask
 
                 var analyzed = AnalyzeItems(episodes, cancellationToken);
                 Interlocked.Add(ref totalProcessed, analyzed);
-
-                writeEdl = analyzed > 0 || Plugin.Instance!.Configuration.RegenerateEdlFiles;
             }
             catch (FingerprintException ex)
             {
@@ -130,25 +116,8 @@ public class BaseItemAnalyzerTask
                     ex);
             }
 
-            if (
-                writeEdl &&
-                Plugin.Instance!.Configuration.EdlAction != EdlAction.None &&
-                _analysisMode == AnalysisMode.Introduction)
-            {
-                EdlManager.UpdateEDLFiles(episodes);
-            }
-
-            progress.Report((totalProcessed * 100) / totalQueued);
+            progress.Report(totalProcessed * 100 / totalQueued);
         });
-
-        if (
-            _analysisMode == AnalysisMode.Introduction &&
-            Plugin.Instance!.Configuration.RegenerateEdlFiles)
-        {
-            _logger.LogInformation("Turning EDL file regeneration flag off");
-            Plugin.Instance!.Configuration.RegenerateEdlFiles = false;
-            Plugin.Instance!.SaveConfiguration();
-        }
     }
 
     /// <summary>
@@ -176,12 +145,13 @@ public class BaseItemAnalyzerTask
             first.SeriesName,
             first.SeasonNumber);
 
-        var analyzers = new Collection<IMediaFileAnalyzer>();
+        var analyzers = new Collection<IMediaFileAnalyzer>
+        {
+            new ChapterAnalyzer(_loggerFactory.CreateLogger<ChapterAnalyzer>()),
+            new ChromaprintAnalyzer(_loggerFactory.CreateLogger<ChromaprintAnalyzer>())
+        };
 
-        analyzers.Add(new ChapterAnalyzer(_loggerFactory.CreateLogger<ChapterAnalyzer>()));
-        analyzers.Add(new ChromaprintAnalyzer(_loggerFactory.CreateLogger<ChromaprintAnalyzer>()));
-
-        if (this._analysisMode == AnalysisMode.Credits)
+        if (_analysisMode == AnalysisMode.Credits)
         {
             analyzers.Add(new BlackFrameAnalyzer(_loggerFactory.CreateLogger<BlackFrameAnalyzer>()));
         }
@@ -190,7 +160,7 @@ public class BaseItemAnalyzerTask
         // analyzed items from the queue.
         foreach (var analyzer in analyzers)
         {
-            items = analyzer.AnalyzeMediaFiles(items, this._analysisMode, cancellationToken);
+            items = analyzer.AnalyzeMediaFiles(items, _analysisMode, cancellationToken);
         }
 
         return totalItems;

@@ -16,12 +16,12 @@ using Microsoft.Extensions.Logging;
 /// </summary>
 public class QueueManager
 {
-    private ILibraryManager _libraryManager;
-    private ILogger<QueueManager> _logger;
+    private readonly ILibraryManager _libraryManager;
+    private readonly ILogger<QueueManager> _logger;
+    private readonly Dictionary<Guid, List<QueuedEpisode>> _queuedEpisodes;
 
-    private double analysisPercent;
-    private List<string> selectedLibraries;
-    private Dictionary<Guid, List<QueuedEpisode>> _queuedEpisodes;
+    private double _analysisPercent;
+    private List<string> _selectedLibraries;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="QueueManager"/> class.
@@ -33,8 +33,8 @@ public class QueueManager
         _logger = logger;
         _libraryManager = libraryManager;
 
-        selectedLibraries = new();
-        _queuedEpisodes = new();
+        _selectedLibraries = [];
+        _queuedEpisodes = [];
     }
 
     /// <summary>
@@ -58,7 +58,7 @@ public class QueueManager
         foreach (var folder in _libraryManager.GetVirtualFolders())
         {
             // If libraries have been selected for analysis, ensure this library was selected.
-            if (selectedLibraries.Count > 0 && !selectedLibraries.Contains(folder.Name))
+            if (_selectedLibraries.Count > 0 && !_selectedLibraries.Contains(folder.Name))
             {
                 _logger.LogDebug("Not analyzing library \"{Name}\": not selected by user", folder.Name);
                 continue;
@@ -98,17 +98,17 @@ public class QueueManager
         var config = Plugin.Instance!.Configuration;
 
         // Store the analysis percent
-        analysisPercent = Convert.ToDouble(config.AnalysisPercent) / 100;
+        _analysisPercent = Convert.ToDouble(config.AnalysisPercent) / 100;
 
         // Get the list of library names which have been selected for analysis, ignoring whitespace and empty entries.
-        selectedLibraries = config.SelectedLibraries
+        _selectedLibraries = config.SelectedLibraries
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
 
         // If any libraries have been selected for analysis, log their names.
-        if (selectedLibraries.Count > 0)
+        if (_selectedLibraries.Count > 0)
         {
-            _logger.LogInformation("Limiting analysis to the following libraries: {Selected}", selectedLibraries);
+            _logger.LogInformation("Limiting analysis to the following libraries: {Selected}", _selectedLibraries);
         }
         else
         {
@@ -134,13 +134,13 @@ public class QueueManager
         {
             // Order by series name, season, and then episode number so that status updates are logged in order
             ParentId = Guid.Parse(rawId),
-            OrderBy = new[]
-            {
-                ("SeriesSortName", SortOrder.Ascending),
-                ("ParentIndexNumber", SortOrder.Ascending),
-                ("IndexNumber", SortOrder.Ascending),
-            },
-            IncludeItemTypes = new BaseItemKind[] { BaseItemKind.Episode },
+            OrderBy =
+            [
+                (ItemSortBy.SeriesSortName, SortOrder.Ascending),
+                (ItemSortBy.ParentIndexNumber, SortOrder.Ascending),
+                (ItemSortBy.IndexNumber, SortOrder.Ascending),
+            ],
+            IncludeItemTypes = [BaseItemKind.Episode],
             Recursive = true,
             IsVirtualItem = false
         };
@@ -196,7 +196,7 @@ public class QueueManager
 
         if (fingerprintDuration >= 5 * 60)
         {
-            fingerprintDuration *= analysisPercent;
+            fingerprintDuration *= _analysisPercent;
         }
 
         fingerprintDuration = Math.Min(
@@ -204,7 +204,7 @@ public class QueueManager
             60 * Plugin.Instance!.Configuration.AnalysisLengthLimit);
 
         // Allocate a new list for each new season
-        _queuedEpisodes.TryAdd(episode.SeasonId, new List<QueuedEpisode>());
+        _queuedEpisodes.TryAdd(episode.SeasonId, []);
 
         // Queue the episode for analysis
         var maxCreditsDuration = Plugin.Instance!.Configuration.MaximumEpisodeCreditsDuration;
