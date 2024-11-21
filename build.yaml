@@ -1,0 +1,14 @@
+name: "Segment Recognition"
+guid: "c83d86bb-a1e0-4c35-a113-e2101cf4ee6b"
+imageUrl: "https://repo.jellyfin.org/releases/plugin/images/jellyfin-plugin-segment-recognition.png"
+version: 1
+targetAbi: "10.10.0.0"
+framework: "net8.0"
+overview: "Extract Media Segments"
+description: "Extract media segments from media files."
+category: "Metadata"
+owner: "jellyfin"
+artifacts:
+  - "Jellyfin.Plugin.SegmentRecognition.dll"
+changelog: |-
+  - Initial release
