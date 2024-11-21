@@ -101,9 +101,7 @@ public class QueueManager
         _analysisPercent = Convert.ToDouble(config.AnalysisPercent) / 100;
 
         // Get the list of library names which have been selected for analysis, ignoring whitespace and empty entries.
-        _selectedLibraries = config.SelectedLibraries
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
+        _selectedLibraries = [.. config.SelectedLibraries.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
 
         // If any libraries have been selected for analysis, log their names.
         if (_selectedLibraries.Count > 0)

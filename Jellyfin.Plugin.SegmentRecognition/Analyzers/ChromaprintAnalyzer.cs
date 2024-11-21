@@ -308,8 +308,8 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
 
                 if (rhsIndex.TryGetValue(modifiedPoint, out var rhsIndexValue))
                 {
-                    var lhsFirst = (int)lhsIndex[originalPoint];
-                    var rhsFirst = (int)rhsIndexValue;
+                    var lhsFirst = lhsIndex[originalPoint];
+                    var rhsFirst = rhsIndexValue;
                     indexShifts.Add(rhsFirst - lhsFirst);
                 }
             }
@@ -372,8 +372,8 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
                 continue;
             }
 
-            var lhsTime = lhsPosition * SamplesToSeconds;
-            var rhsTime = rhsPosition * SamplesToSeconds;
+            var lhsTime = Math.Round(lhsPosition * SamplesToSeconds, 4, MidpointRounding.AwayFromZero);
+            var rhsTime = Math.Round(rhsPosition * SamplesToSeconds, 4, MidpointRounding.AwayFromZero);
 
             lhsTimes.Add(lhsTime);
             rhsTimes.Add(rhsTime);
@@ -384,14 +384,14 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
         rhsTimes.Add(double.MaxValue);
 
         // Now that both fingerprints have been compared at this shift, see if there's a contiguous time range.
-        var lContiguous = TimeRangeHelpers.FindContiguous(lhsTimes.ToArray(), _maximumTimeSkip);
+        var lContiguous = TimeRangeHelpers.FindContiguous([.. lhsTimes], _maximumTimeSkip);
         if (lContiguous is null || lContiguous.Duration < _minimumIntroDuration)
         {
             return (new TimeRange(), new TimeRange());
         }
 
         // Since LHS had a contiguous time range, RHS must have one also.
-        var rContiguous = TimeRangeHelpers.FindContiguous(rhsTimes.ToArray(), _maximumTimeSkip)!;
+        var rContiguous = TimeRangeHelpers.FindContiguous([.. rhsTimes], _maximumTimeSkip)!;
 
         if (_analysisMode == AnalysisMode.Introduction)
         {
@@ -451,7 +451,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
                 originalIntro.IntroEnd);
 
             // Detect silence in the media file up to the end of the intro.
-            var silence = FFmpegWrapper.DetectSilence(episode, (int)originalIntro.IntroEnd + 2);
+            var silence = FFmpegWrapper.DetectSilence(episode, new TimeRange(originalIntro.IntroEnd, originalIntro.IntroEnd + 2));
 
             // For all periods of silence
             foreach (var currentRange in silence)

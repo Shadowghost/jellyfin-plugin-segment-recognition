@@ -12,19 +12,8 @@ namespace Jellyfin.Plugin.SegmentRecognition;
 /// <summary>
 /// Wrapper for libchromaprint and the silencedetect filter.
 /// </summary>
-public static class FFmpegWrapper
+public static partial class FFmpegWrapper
 {
-    /// <summary>
-    /// Used with FFmpeg's silencedetect filter to extract the start and end times of silence.
-    /// </summary>
-    private static readonly Regex SilenceDetectionExpression = new(
-        "silence_(?<type>start|end): (?<time>[0-9\\.]+)");
-
-    /// <summary>
-    /// Used with FFmpeg's blackframe filter to extract the time and percentage of black pixels.
-    /// </summary>
-    private static readonly Regex BlackFrameRegex = new("(pblack|t):[0-9.]+");
-
     /// <summary>
     /// Gets or sets the logger.
     /// </summary>
@@ -33,6 +22,18 @@ public static class FFmpegWrapper
     private static Dictionary<string, string> ChromaprintLogs { get; set; } = [];
 
     private static Dictionary<Guid, Dictionary<uint, int>> InvertedIndexCache { get; set; } = [];
+
+    /// <summary>
+    /// Used with FFmpeg's silencedetect filter to extract the start and end times of silence.
+    /// </summary>
+    [GeneratedRegex("silence_(?<type>start|end): (?<time>[0-9\\.]+)")]
+    private static partial Regex SilenceDetectionExpression();
+
+    /// <summary>
+    /// Used with FFmpeg's blackframe filter to extract the time and percentage of black pixels.
+    /// </summary>
+    [GeneratedRegex("(pblack|t):[0-9.]+")]
+    private static partial Regex BlackFrameRegex();
 
     /// <summary>
     /// Check that the installed version of ffmpeg supports chromaprint.
@@ -134,27 +135,34 @@ public static class FFmpegWrapper
     /// Detect ranges of silence in the provided episode.
     /// </summary>
     /// <param name="episode">Queued episode.</param>
-    /// <param name="limit">Maximum amount of audio (in seconds) to detect silence in.</param>
+    /// <param name="range">Time range to search.</param>
     /// <returns>Array of TimeRange objects that are silent in the queued episode.</returns>
-    public static TimeRange[] DetectSilence(QueuedEpisode episode, int limit)
+    public static TimeRange[] DetectSilence(QueuedEpisode episode, TimeRange range)
     {
         Logger?.LogTrace(
-            "Detecting silence in \"{File}\" (limit {Limit}, id {Id})",
+            "Detecting silence in \"{File}\" (range {Start}-{End}, id {Id})",
             episode.Path,
-            limit,
+            range.Start,
+            range.End,
             episode.EpisodeId);
 
         // -vn, -sn, -dn: ignore video, subtitle, and data tracks
         var args = string.Format(
             CultureInfo.InvariantCulture,
             "-vn -sn -dn " +
-                "-i \"{0}\" -to {1} -af \"silencedetect=noise={2}dB:duration=0.1\" -f null -",
+                "-ss {0} -i \"{1}\" -to {2} -af \"silencedetect=noise={3}dB:duration=0.1\" -f null -",
+            range.Start,
             episode.Path,
-            limit,
+            range.Duration,
             Plugin.Instance?.Configuration.SilenceDetectionMaximumNoise ?? -50);
 
-        // Cache the output of this command to "GUID-intro-silence-v1"
-        var cacheKey = episode.EpisodeId.ToString("N") + "-intro-silence-v1";
+        // Cache the output of this command to "GUID-intro-silence-v2"
+        var cacheKey = string.Format(
+            CultureInfo.InvariantCulture,
+            "{0}-silence-{1}-{2}-v2",
+            episode.EpisodeId.ToString("N"),
+            range.Start,
+            range.End);
 
         var currentRange = new TimeRange();
         var silenceRanges = new List<TimeRange>();
@@ -166,23 +174,25 @@ public static class FFmpegWrapper
          * [silencedetect @ 0x000000000000] silence_end: 56.123 | silence_duration: 43.783
         */
         var raw = Encoding.UTF8.GetString(GetOutput(args, cacheKey, true));
-        foreach (Match match in SilenceDetectionExpression.Matches(raw))
+        foreach (Match match in SilenceDetectionExpression().Matches(raw))
         {
             var isStart = match.Groups["type"].Value == "start";
-            var time = Convert.ToDouble(match.Groups["time"].Value, CultureInfo.InvariantCulture);
-
-            if (isStart)
+            if (double.TryParse(match.Groups["time"].Value, CultureInfo.InvariantCulture, out var time))
             {
-                currentRange.Start = time;
-            }
-            else
-            {
-                currentRange.End = time;
-                silenceRanges.Add(new TimeRange(currentRange));
+                var roundedTime = Math.Round(time, 4, MidpointRounding.AwayFromZero);
+                if (isStart)
+                {
+                    currentRange.Start = roundedTime + range.Start;
+                }
+                else
+                {
+                    currentRange.End = roundedTime + range.Start;
+                    silenceRanges.Add(new TimeRange(currentRange));
+                }
             }
         }
 
-        return silenceRanges.ToArray();
+        return [.. silenceRanges];
     }
 
     /// <summary>
@@ -224,7 +234,7 @@ public static class FFmpegWrapper
         var raw = Encoding.UTF8.GetString(GetOutput(args, cacheKey, true));
         foreach (var line in raw.Split('\n'))
         {
-            var matches = BlackFrameRegex.Matches(line);
+            var matches = BlackFrameRegex().Matches(line);
             if (matches.Count != 2)
             {
                 continue;
@@ -245,7 +255,7 @@ public static class FFmpegWrapper
             }
         }
 
-        return blackFrames.ToArray();
+        return [.. blackFrames];
     }
 
     /// <summary>
@@ -464,7 +474,7 @@ public static class FFmpegWrapper
         // Try to cache this fingerprint.
         CacheFingerprint(episode, mode, results);
 
-        return results.ToArray();
+        return [.. results];
     }
 
     /// <summary>
@@ -520,7 +530,7 @@ public static class FFmpegWrapper
             return false;
         }
 
-        fingerprint = result.ToArray();
+        fingerprint = [.. result];
         return true;
     }
 
