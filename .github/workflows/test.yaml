@@ -14,5 +14,36 @@ on:
   workflow_dispatch:
 
 jobs:
-  call:
-    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/test.yaml@master
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@6bd8b7f7774af54e05809fcc5431931b3eb1ddee # v4.0.1
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install jellyfin-ffmpeg
+        uses: myci-actions/add-deb-repo@43408b9f0225d1c64ba667d59e337c6140383bbe
+        with:
+          repo: deb https://repo.jellyfin.org/ubuntu jammy main
+          repo-name: jellyfin
+          keys-asc: https://repo.jellyfin.org/debian/jellyfin_team.gpg.key
+          update: true
+          install: jellyfin-ffmpeg7
+
+      - name: Symlink jellyfin-ffmpeg
+        run: |
+          ln -s /usr/share/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg
+          ln -s /usr/share/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe
+
+      - name: Install dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test --no-restore --verbosity normal
