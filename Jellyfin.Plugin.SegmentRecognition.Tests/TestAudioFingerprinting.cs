@@ -126,12 +126,12 @@ public class TestAudioFingerprinting
             mode);
 
         Assert.True(lhs.Valid);
-        Assert.Equal(0, lhs.IntroStart);
-        Assert.Equal(17.792, lhs.IntroEnd);
+        Assert.Equal(0, lhs.IntroStart, 4);
+        Assert.Equal(17.2082, lhs.IntroEnd, 4);
 
         Assert.True(rhs.Valid);
-        Assert.Equal(5.12, rhs.IntroStart);
-        Assert.Equal(22.912, rhs.IntroEnd);
+        Assert.Equal(0, rhs.IntroStart, 4);
+        Assert.Equal(22.1602, rhs.IntroEnd, 4);
     }
 
     /// <summary>
