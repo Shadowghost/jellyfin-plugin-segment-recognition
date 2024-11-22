@@ -1,6 +1,7 @@
 namespace Jellyfin.Plugin.SegmentRecognition;
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Numerics;
@@ -16,9 +17,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     /// Seconds of audio in one fingerprint point.
     /// This value is defined by the Chromaprint library and should not be changed.
     /// </summary>
-    private const double SamplesToSeconds = 0.128;
-
-    private readonly Dictionary<Guid, Dictionary<uint, int>> _invertedIndexCache = [];
+    private const double SamplesToSeconds = 0.1238;
 
     private readonly int _minimumIntroDuration;
 
@@ -31,8 +30,6 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     private readonly double _silenceDetectionMinimumDuration;
 
     private readonly ILogger<ChromaprintAnalyzer> _logger;
-
-    private AnalysisMode _analysisMode;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChromaprintAnalyzer"/> class.
@@ -49,6 +46,8 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
 
         _logger = logger;
     }
+
+    private static ConcurrentDictionary<AnalysisMode, ConcurrentDictionary<Guid, Dictionary<uint, int>>> InvertedIndexCache { get; set; } = new();
 
     /// <inheritdoc />
     public ReadOnlyCollection<QueuedEpisode> AnalyzeMediaFiles(
@@ -67,8 +66,6 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
 
         // Episodes that were analyzed and do not have an introduction.
         var episodesWithoutIntros = new List<QueuedEpisode>();
-
-        _analysisMode = mode;
 
         // Compute fingerprints for all episodes in the season
         foreach (var episode in episodeAnalysisQueue)
@@ -107,7 +104,8 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
                     currentEpisode.EpisodeId,
                     fingerprintCache[currentEpisode.EpisodeId],
                     remainingEpisode.EpisodeId,
-                    fingerprintCache[remainingEpisode.EpisodeId]);
+                    fingerprintCache[remainingEpisode.EpisodeId],
+                    mode);
 
                 // Ignore this comparison result if:
                 // - one of the intros isn't valid, or
@@ -127,7 +125,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
                  *
                  * To fix this, add the starting time of the fingerprint to the reported time range.
                  */
-                if (_analysisMode == AnalysisMode.Credits)
+                if (mode == AnalysisMode.Credits)
                 {
                     currentIntro.IntroStart += currentEpisode.CreditsFingerprintStart;
                     currentIntro.IntroEnd += currentEpisode.CreditsFingerprintStart;
@@ -165,13 +163,13 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
             return analysisQueue;
         }
 
-        if (_analysisMode == AnalysisMode.Introduction)
+        if (mode == AnalysisMode.Introduction)
         {
             // Adjust all introduction end times so that they end at silence.
             seasonIntros = AdjustIntroEndTimes(analysisQueue, seasonIntros);
         }
 
-        Plugin.Instance!.UpdateTimestamps(seasonIntros, _analysisMode);
+        Plugin.Instance!.UpdateTimestamps(seasonIntros, mode);
 
         return episodesWithoutIntros.AsReadOnly();
     }
@@ -183,16 +181,18 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     /// <param name="lhsPoints">First episode fingerprint points.</param>
     /// <param name="rhsId">Second episode id.</param>
     /// <param name="rhsPoints">Second episode fingerprint points.</param>
+    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
     /// <returns>Intros for the first and second episodes.</returns>
     public (Intro Lhs, Intro Rhs) CompareEpisodes(
         Guid lhsId,
         uint[] lhsPoints,
         Guid rhsId,
-        uint[] rhsPoints)
+        uint[] rhsPoints,
+        AnalysisMode mode)
     {
         // Creates an inverted fingerprint point index for both episodes.
         // For every point which is a 100% match, search for an introduction at that point.
-        var (lhsRanges, rhsRanges) = SearchInvertedIndex(lhsId, lhsPoints, rhsId, rhsPoints);
+        var (lhsRanges, rhsRanges) = SearchInvertedIndex(lhsId, lhsPoints, rhsId, rhsPoints, mode);
 
         if (lhsRanges.Count > 0)
         {
@@ -214,10 +214,12 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     /// </summary>
     /// <param name="id">Episode ID.</param>
     /// <param name="fingerprint">Chromaprint fingerprint.</param>
+    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
     /// <returns>Inverted index.</returns>
-    public Dictionary<uint, int> CreateInvertedIndex(Guid id, uint[] fingerprint)
+    public Dictionary<uint, int> CreateInvertedIndex(Guid id, uint[] fingerprint, AnalysisMode mode)
     {
-        if (_invertedIndexCache.TryGetValue(id, out var cached))
+        var modeCache = InvertedIndexCache.GetOrAdd(mode, _ => new ConcurrentDictionary<Guid, Dictionary<uint, int>>());
+        if (modeCache.TryGetValue(id, out var cached))
         {
             return cached;
         }
@@ -233,7 +235,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
             invIndex[point] = i;
         }
 
-        _invertedIndexCache[id] = invIndex;
+        modeCache[id] = invIndex;
 
         return invIndex;
     }
@@ -281,19 +283,21 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     /// <param name="lhsPoints">Left episode fingerprint points.</param>
     /// <param name="rhsId">RHS ID.</param>
     /// <param name="rhsPoints">Right episode fingerprint points.</param>
+    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
     /// <returns>List of shared TimeRanges between the left and right episodes.</returns>
     private (List<TimeRange> Lhs, List<TimeRange> Rhs) SearchInvertedIndex(
         Guid lhsId,
         uint[] lhsPoints,
         Guid rhsId,
-        uint[] rhsPoints)
+        uint[] rhsPoints,
+        AnalysisMode mode)
     {
         var lhsRanges = new List<TimeRange>();
         var rhsRanges = new List<TimeRange>();
 
         // Generate inverted indexes for the left and right episodes.
-        var lhsIndex = CreateInvertedIndex(lhsId, lhsPoints);
-        var rhsIndex = CreateInvertedIndex(rhsId, rhsPoints);
+        var lhsIndex = CreateInvertedIndex(lhsId, lhsPoints, mode);
+        var rhsIndex = CreateInvertedIndex(rhsId, rhsPoints, mode);
         var indexShifts = new HashSet<int>();
 
         // For all audio points in the left episode, check if the right episode has a point which matches exactly.
@@ -318,7 +322,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
         // Use all discovered shifts to compare the episodes.
         foreach (var shift in indexShifts)
         {
-            var (lhsIndexContiguous, rhsIndexContiguous) = FindContiguous(lhsPoints, rhsPoints, shift);
+            var (lhsIndexContiguous, rhsIndexContiguous) = FindContiguous(lhsPoints, rhsPoints, shift, mode);
             if (lhsIndexContiguous.End > 0 && rhsIndexContiguous.End > 0)
             {
                 lhsRanges.Add(lhsIndexContiguous);
@@ -335,10 +339,12 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
     /// <param name="lhs">First fingerprint to compare.</param>
     /// <param name="rhs">Second fingerprint to compare.</param>
     /// <param name="shiftAmount">Amount to shift one fingerprint by.</param>
+    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
     private (TimeRange Lhs, TimeRange Rhs) FindContiguous(
         uint[] lhs,
         uint[] rhs,
-        int shiftAmount)
+        int shiftAmount,
+        AnalysisMode mode)
     {
         var leftOffset = 0;
         var rightOffset = 0;
@@ -393,7 +399,7 @@ public class ChromaprintAnalyzer : IMediaFileAnalyzer
         // Since LHS had a contiguous time range, RHS must have one also.
         var rContiguous = TimeRangeHelpers.FindContiguous([.. rhsTimes], _maximumTimeSkip)!;
 
-        if (_analysisMode == AnalysisMode.Introduction)
+        if (mode == AnalysisMode.Introduction)
         {
             // Tweak the end timestamps just a bit to ensure as little content as possible is skipped over.
             // TODO: remove this

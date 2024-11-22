@@ -98,7 +98,7 @@ public class TestAudioFingerprinting
 
         var chromaprint = CreateChromaprintAnalyzer();
 
-        var actual = chromaprint.CreateInvertedIndex(Guid.NewGuid(), fpr);
+        var actual = chromaprint.CreateInvertedIndex(Guid.NewGuid(), fpr, AnalysisMode.Introduction);
 
         Assert.Equal(expected, actual);
     }
@@ -110,17 +110,19 @@ public class TestAudioFingerprinting
     public void TestIntroDetection()
     {
         var chromaprint = CreateChromaprintAnalyzer();
+        var mode = AnalysisMode.Introduction;
 
         var lhsEpisode = queueEpisode("audio/big_buck_bunny_intro.mp3");
         var rhsEpisode = queueEpisode("audio/big_buck_bunny_clip.mp3");
-        var lhsFingerprint = FFmpegWrapper.Fingerprint(lhsEpisode, AnalysisMode.Introduction);
-        var rhsFingerprint = FFmpegWrapper.Fingerprint(rhsEpisode, AnalysisMode.Introduction);
+        var lhsFingerprint = FFmpegWrapper.Fingerprint(lhsEpisode, mode);
+        var rhsFingerprint = FFmpegWrapper.Fingerprint(rhsEpisode, mode);
 
         var (lhs, rhs) = chromaprint.CompareEpisodes(
             lhsEpisode.EpisodeId,
             lhsFingerprint,
             rhsEpisode.EpisodeId,
-            rhsFingerprint);
+            rhsFingerprint,
+            mode);
 
         Assert.True(lhs.Valid);
         Assert.Equal(0, lhs.IntroStart);

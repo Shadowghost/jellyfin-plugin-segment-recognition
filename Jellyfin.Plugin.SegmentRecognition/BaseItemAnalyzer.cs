@@ -1,58 +1,59 @@
 namespace Jellyfin.Plugin.SegmentRecognition;
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
-/// Common code shared by all media item analyzer tasks.
+/// Base item analyzer.
 /// </summary>
-public class BaseItemAnalyzerTask
+public class BaseItemAnalyzer
 {
-    private readonly AnalysisMode _analysisMode;
-
+    private readonly IReadOnlyList<AnalysisMode> _analysisModes;
+    private readonly QueueManager _queueManager;
     private readonly ILogger _logger;
-
-    private readonly ILoggerFactory _loggerFactory;
-
-    private readonly ILibraryManager _libraryManager;
+    private readonly ChapterAnalyzer _chapterAnalyzer;
+    private readonly ChromaprintAnalyzer _chromaprintAnalyzer;
+    private readonly BlackFrameAnalyzer _blackFrameAnalyzer;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BaseItemAnalyzerTask"/> class.
+    /// Initializes a new instance of the <see cref="BaseItemAnalyzer"/> class.
     /// </summary>
-    /// <param name="mode">Analysis mode.</param>
-    /// <param name="logger">Task logger.</param>
-    /// <param name="loggerFactory">Logger factory.</param>
-    /// <param name="libraryManager">Library manager.</param>
-    public BaseItemAnalyzerTask(
-        AnalysisMode mode,
+    /// <param name="modes">Analysis modes.</param>
+    /// <param name="queueManager">The <see cref="QueueManager"/>.</param>
+    /// <param name="logger">Instance of the <see cref="ILoggerFactory"/> interface.</param>
+    /// <param name="chapterAnalyzer">The <see cref="ChapterAnalyzer"/>.</param>
+    /// <param name="chromaprintAnalyzer">The <see cref="ChromaprintAnalyzer"/>.</param>
+    /// <param name="blackFrameAnalyzer">The <see cref="BlackFrameAnalyzer"/>.</param>
+    public BaseItemAnalyzer(
+        IReadOnlyList<AnalysisMode> modes,
+        QueueManager queueManager,
         ILogger logger,
-        ILoggerFactory loggerFactory,
-        ILibraryManager libraryManager)
+        ChapterAnalyzer chapterAnalyzer,
+        ChromaprintAnalyzer chromaprintAnalyzer,
+        BlackFrameAnalyzer blackFrameAnalyzer)
     {
-        _analysisMode = mode;
+        _analysisModes = modes;
+        _queueManager = queueManager;
         _logger = logger;
-        _loggerFactory = loggerFactory;
-        _libraryManager = libraryManager;
+        _chapterAnalyzer = chapterAnalyzer;
+        _chromaprintAnalyzer = chromaprintAnalyzer;
+        _blackFrameAnalyzer = blackFrameAnalyzer;
     }
 
     /// <summary>
     /// Analyze all media items on the server.
     /// </summary>
-    /// <param name="progress">Progress.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="progress">The Progress.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
     public void AnalyzeItems(
         IProgress<double> progress,
         CancellationToken cancellationToken)
     {
-        var queueManager = new QueueManager(
-            _loggerFactory.CreateLogger<QueueManager>(),
-            _libraryManager);
-
-        var queue = queueManager.GetMediaItems();
+        var queue = _queueManager.GetMediaItems();
 
         var totalQueued = 0;
         foreach (var kvp in queue)
@@ -67,6 +68,7 @@ public class BaseItemAnalyzerTask
         }
 
         var totalProcessed = 0;
+        var modeCount = _analysisModes.Count;
         var options = new ParallelOptions()
         {
             MaxDegreeOfParallelism = Plugin.Instance!.Configuration.MaxParallelism
@@ -76,25 +78,35 @@ public class BaseItemAnalyzerTask
         {
             // Since the first run of the task can run for multiple hours, ensure that none
             // of the current media items were deleted from Jellyfin since the task was started.
-            var (episodes, unanalyzed) = queueManager.VerifyQueue(
+            var (episodes, modesToExecute) = _queueManager.VerifyQueue(
                 season.Value.AsReadOnly(),
-                _analysisMode);
+                _analysisModes);
 
-            if (episodes.Count == 0)
+            var episodeCount = episodes.Count;
+            if (episodeCount == 0)
             {
                 return;
             }
 
             var first = episodes[0];
 
-            if (!unanalyzed)
+            if (modesToExecute.Count == 0)
             {
                 _logger.LogDebug(
                     "All episodes in {Name} season {Season} have already been analyzed",
                     first.SeriesName,
                     first.SeasonNumber);
 
+                Interlocked.Add(ref totalProcessed, episodeCount);
+                progress.Report(totalProcessed * 100 / totalQueued);
+
                 return;
+            }
+
+            if (modeCount != modesToExecute.Count)
+            {
+                Interlocked.Add(ref totalProcessed, episodeCount);
+                progress.Report(totalProcessed * 100 / totalQueued);
             }
 
             try
@@ -104,8 +116,12 @@ public class BaseItemAnalyzerTask
                     return;
                 }
 
-                var analyzed = AnalyzeItems(episodes, cancellationToken);
-                Interlocked.Add(ref totalProcessed, analyzed);
+                foreach (AnalysisMode mode in modesToExecute)
+                {
+                    var analyzed = AnalyzeItems(episodes, mode, cancellationToken);
+                    Interlocked.Add(ref totalProcessed, analyzed);
+                    progress.Report(totalProcessed * 100 / totalQueued);
+                }
             }
             catch (FingerprintException ex)
             {
@@ -124,10 +140,12 @@ public class BaseItemAnalyzerTask
     /// Analyze a group of media items for skippable segments.
     /// </summary>
     /// <param name="items">Media items to analyze.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
     /// <returns>Number of items that were successfully analyzed.</returns>
     private int AnalyzeItems(
         ReadOnlyCollection<QueuedEpisode> items,
+        AnalysisMode mode,
         CancellationToken cancellationToken)
     {
         var totalItems = items.Count;
@@ -145,22 +163,22 @@ public class BaseItemAnalyzerTask
             first.SeriesName,
             first.SeasonNumber);
 
-        var analyzers = new Collection<IMediaFileAnalyzer>
+        var analyzers = new List<IMediaFileAnalyzer>
         {
-            new ChapterAnalyzer(_loggerFactory.CreateLogger<ChapterAnalyzer>()),
-            new ChromaprintAnalyzer(_loggerFactory.CreateLogger<ChromaprintAnalyzer>())
+            _chapterAnalyzer,
+            _chromaprintAnalyzer
         };
 
-        if (_analysisMode == AnalysisMode.Credits)
+        if (mode == AnalysisMode.Credits)
         {
-            analyzers.Add(new BlackFrameAnalyzer(_loggerFactory.CreateLogger<BlackFrameAnalyzer>()));
+            analyzers.Add(_blackFrameAnalyzer);
         }
 
         // Use each analyzer to find skippable ranges in all media files, removing successfully
         // analyzed items from the queue.
         foreach (var analyzer in analyzers)
         {
-            items = analyzer.AnalyzeMediaFiles(items, _analysisMode, cancellationToken);
+            items = analyzer.AnalyzeMediaFiles(items, mode, cancellationToken);
         }
 
         return totalItems;

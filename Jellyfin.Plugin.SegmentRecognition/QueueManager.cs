@@ -65,13 +65,19 @@ public class QueueManager
             }
 
             _logger.LogInformation(
-                "Running enqueue of items in library {Name} ({ItemId})",
-                folder.Name,
-                folder.ItemId);
+                "Running enqueue of items in library {Name}",
+                folder.Name);
 
             try
             {
-                QueueLibraryContents(folder.ItemId);
+                foreach (var location in folder.Locations)
+                {
+                    var libraryRootId = _libraryManager.FindByPath(location, true)?.Id;
+                    if (libraryRootId is not null)
+                    {
+                        QueueLibraryContents(libraryRootId.Value);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -124,14 +130,14 @@ public class QueueManager
         }
     }
 
-    private void QueueLibraryContents(string rawId)
+    private void QueueLibraryContents(Guid rawId)
     {
         _logger.LogDebug("Constructing anonymous internal query");
 
         var query = new InternalItemsQuery()
         {
             // Order by series name, season, and then episode number so that status updates are logged in order
-            ParentId = Guid.Parse(rawId),
+            ParentId = rawId,
             OrderBy =
             [
                 (ItemSortBy.SeriesSortName, SortOrder.Ascending),
@@ -203,6 +209,15 @@ public class QueueManager
 
         // Allocate a new list for each new season
         _queuedEpisodes.TryAdd(episode.SeasonId, []);
+        if (_queuedEpisodes[episode.SeasonId].Any(e => e.EpisodeId == episode.Id))
+        {
+            _logger.LogDebug(
+                "Episode: {Name} - Series: {Series} ({Id}) is already queued",
+                episode.Name,
+                episode.SeriesName,
+                episode.Id);
+            return;
+        }
 
         // Queue the episode for analysis
         var maxCreditsDuration = Plugin.Instance!.Configuration.MaximumEpisodeCreditsDuration;
@@ -226,17 +241,16 @@ public class QueueManager
     /// This is done to ensure that we don't analyze items that were deleted between the call to GetMediaItems() and popping them from the queue.
     /// </summary>
     /// <param name="candidates">Queued media items.</param>
-    /// <param name="mode">Analysis mode.</param>
+    /// <param name="modes">Analysis mode.</param>
     /// <returns>Media items that have been verified to exist in Jellyfin and in storage.</returns>
-    public (ReadOnlyCollection<QueuedEpisode> VerifiedItems, bool AnyUnanalyzed)
-        VerifyQueue(ReadOnlyCollection<QueuedEpisode> candidates, AnalysisMode mode)
+    public (ReadOnlyCollection<QueuedEpisode> VerifiedItems, ReadOnlyCollection<AnalysisMode> RequiredModes)
+    VerifyQueue(ReadOnlyCollection<QueuedEpisode> candidates, IReadOnlyList<AnalysisMode> modes)
     {
-        var unanalyzed = false;
         var verified = new List<QueuedEpisode>();
+        var modesToExecute = new List<AnalysisMode>();
 
-        var timestamps = mode == AnalysisMode.Introduction ?
-                Plugin.Instance!.Intros :
-                Plugin.Instance!.Credits;
+        var analyzeIntros = modes.Contains(AnalysisMode.Introduction);
+        var analyzeCredits = modes.Contains(AnalysisMode.Credits);
 
         foreach (var candidate in candidates)
         {
@@ -249,22 +263,29 @@ public class QueueManager
                     verified.Add(candidate);
                 }
 
-                if (!timestamps.ContainsKey(candidate.EpisodeId))
+                if (analyzeIntros && !Plugin.Instance!.Intros.ContainsKey(candidate.EpisodeId))
                 {
-                    unanalyzed = true;
+                    modesToExecute.Add(AnalysisMode.Introduction);
+                    analyzeIntros = false;
+                }
+
+                if (analyzeCredits && !Plugin.Instance!.Credits.ContainsKey(candidate.EpisodeId))
+                {
+                    modesToExecute.Add(AnalysisMode.Credits);
+                    analyzeCredits = false;
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(
                     "Skipping {Mode} analysis of {Name} ({Id}): {Exception}",
-                    mode,
+                    modes,
                     candidate.Name,
                     candidate.EpisodeId,
                     ex);
             }
         }
 
-        return (verified.AsReadOnly(), unanalyzed);
+        return (verified.AsReadOnly(), modesToExecute.AsReadOnly());
     }
 }

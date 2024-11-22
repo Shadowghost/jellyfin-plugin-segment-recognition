@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -15,20 +14,31 @@ namespace Jellyfin.Plugin.SegmentRecognition;
 public class DetectCreditsTask : IScheduledTask
 {
     private readonly ILoggerFactory _loggerFactory;
-
-    private readonly ILibraryManager _libraryManager;
+    private readonly BaseItemAnalyzer _baseItemAnalyzer;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DetectCreditsTask"/> class.
     /// </summary>
-    /// <param name="loggerFactory">Logger factory.</param>
-    /// <param name="libraryManager">Library manager.</param>
+    /// <param name="loggerFactory">Instance of the <see cref="ILoggerFactory"/> interface.</param>
+    /// <param name="queueManager">The <see cref="QueueManager"/>.</param>
+    /// <param name="chapterAnalyzer">The <see cref="ChapterAnalyzer"/>.</param>
+    /// <param name="chromaprintAnalyzer">The <see cref="ChromaprintAnalyzer"/>.</param>
+    /// <param name="blackFrameAnalyzer">The <see cref="BlackFrameAnalyzer"/>.</param>
     public DetectCreditsTask(
         ILoggerFactory loggerFactory,
-        ILibraryManager libraryManager)
+        QueueManager queueManager,
+        ChapterAnalyzer chapterAnalyzer,
+        ChromaprintAnalyzer chromaprintAnalyzer,
+        BlackFrameAnalyzer blackFrameAnalyzer)
     {
         _loggerFactory = loggerFactory;
-        _libraryManager = libraryManager;
+        _baseItemAnalyzer = new BaseItemAnalyzer(
+            [AnalysisMode.Credits],
+            queueManager,
+            _loggerFactory.CreateLogger<DetectCreditsTask>(),
+            chapterAnalyzer,
+            chromaprintAnalyzer,
+            blackFrameAnalyzer);
     }
 
     /// <summary>
@@ -59,18 +69,7 @@ public class DetectCreditsTask : IScheduledTask
     /// <returns>Task.</returns>
     public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        if (_libraryManager is null)
-        {
-            throw new InvalidOperationException("Library manager was null");
-        }
-
-        var baseAnalyzer = new BaseItemAnalyzerTask(
-            AnalysisMode.Credits,
-            _loggerFactory.CreateLogger<DetectCreditsTask>(),
-            _loggerFactory,
-            _libraryManager);
-
-        baseAnalyzer.AnalyzeItems(progress, cancellationToken);
+        _baseItemAnalyzer.AnalyzeItems(progress, cancellationToken);
 
         return Task.CompletedTask;
     }
