@@ -38,9 +38,9 @@ public class QueuedEpisode
     public int IntroFingerprintEnd { get; set; }
 
     /// <summary>
-    /// Gets or sets the timestamp (in seconds) to start looking for end credits at.
+    /// Gets or sets the timestamp (in seconds) to start looking for an outro at.
     /// </summary>
-    public int CreditsFingerprintStart { get; set; }
+    public int OutroFingerprintStart { get; set; }
 
     /// <summary>
     /// Gets or sets the total duration of this media file (in seconds).

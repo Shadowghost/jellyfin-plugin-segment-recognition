@@ -230,7 +230,7 @@ public class QueueManager
             Path = episode.Path,
             Duration = Convert.ToInt32(duration),
             IntroFingerprintEnd = Convert.ToInt32(fingerprintDuration),
-            CreditsFingerprintStart = Convert.ToInt32(duration - maxCreditsDuration),
+            OutroFingerprintStart = Convert.ToInt32(duration - maxCreditsDuration),
         });
 
         Plugin.Instance!.TotalQueued++;
@@ -243,14 +243,14 @@ public class QueueManager
     /// <param name="candidates">Queued media items.</param>
     /// <param name="modes">Analysis mode.</param>
     /// <returns>Media items that have been verified to exist in Jellyfin and in storage.</returns>
-    public (ReadOnlyCollection<QueuedEpisode> VerifiedItems, ReadOnlyCollection<AnalysisMode> RequiredModes)
-    VerifyQueue(ReadOnlyCollection<QueuedEpisode> candidates, IReadOnlyList<AnalysisMode> modes)
+    public (ReadOnlyCollection<QueuedEpisode> VerifiedItems, ReadOnlyCollection<MediaSegmentType> RequiredModes)
+    VerifyQueue(ReadOnlyCollection<QueuedEpisode> candidates, IReadOnlyList<MediaSegmentType> modes)
     {
         var verified = new List<QueuedEpisode>();
-        var modesToExecute = new List<AnalysisMode>();
+        var modesToExecute = new List<MediaSegmentType>();
 
-        var analyzeIntros = modes.Contains(AnalysisMode.Introduction);
-        var analyzeCredits = modes.Contains(AnalysisMode.Credits);
+        var analyzeIntros = modes.Contains(MediaSegmentType.Intro);
+        var analyzeCredits = modes.Contains(MediaSegmentType.Outro);
 
         foreach (var candidate in candidates)
         {
@@ -265,13 +265,13 @@ public class QueueManager
 
                 if (analyzeIntros && !Plugin.Instance!.Intros.ContainsKey(candidate.EpisodeId))
                 {
-                    modesToExecute.Add(AnalysisMode.Introduction);
+                    modesToExecute.Add(MediaSegmentType.Intro);
                     analyzeIntros = false;
                 }
 
-                if (analyzeCredits && !Plugin.Instance!.Credits.ContainsKey(candidate.EpisodeId))
+                if (analyzeCredits && !Plugin.Instance!.Outro.ContainsKey(candidate.EpisodeId))
                 {
-                    modesToExecute.Add(AnalysisMode.Credits);
+                    modesToExecute.Add(MediaSegmentType.Outro);
                     analyzeCredits = false;
                 }
             }

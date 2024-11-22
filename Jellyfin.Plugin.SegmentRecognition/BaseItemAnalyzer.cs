@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
@@ -12,7 +13,7 @@ using Microsoft.Extensions.Logging;
 /// </summary>
 public class BaseItemAnalyzer
 {
-    private readonly IReadOnlyList<AnalysisMode> _analysisModes;
+    private readonly IReadOnlyList<MediaSegmentType> _mediaSegmentTypes;
     private readonly QueueManager _queueManager;
     private readonly ILogger _logger;
     private readonly ChapterAnalyzer _chapterAnalyzer;
@@ -29,14 +30,14 @@ public class BaseItemAnalyzer
     /// <param name="chromaprintAnalyzer">The <see cref="ChromaprintAnalyzer"/>.</param>
     /// <param name="blackFrameAnalyzer">The <see cref="BlackFrameAnalyzer"/>.</param>
     public BaseItemAnalyzer(
-        IReadOnlyList<AnalysisMode> modes,
+        IReadOnlyList<MediaSegmentType> modes,
         QueueManager queueManager,
         ILogger logger,
         ChapterAnalyzer chapterAnalyzer,
         ChromaprintAnalyzer chromaprintAnalyzer,
         BlackFrameAnalyzer blackFrameAnalyzer)
     {
-        _analysisModes = modes;
+        _mediaSegmentTypes = modes;
         _queueManager = queueManager;
         _logger = logger;
         _chapterAnalyzer = chapterAnalyzer;
@@ -68,7 +69,7 @@ public class BaseItemAnalyzer
         }
 
         var totalProcessed = 0;
-        var modeCount = _analysisModes.Count;
+        var modeCount = _mediaSegmentTypes.Count;
         var options = new ParallelOptions()
         {
             MaxDegreeOfParallelism = Plugin.Instance!.Configuration.MaxParallelism
@@ -80,7 +81,7 @@ public class BaseItemAnalyzer
             // of the current media items were deleted from Jellyfin since the task was started.
             var (episodes, modesToExecute) = _queueManager.VerifyQueue(
                 season.Value.AsReadOnly(),
-                _analysisModes);
+                _mediaSegmentTypes);
 
             var episodeCount = episodes.Count;
             if (episodeCount == 0)
@@ -116,7 +117,7 @@ public class BaseItemAnalyzer
                     return;
                 }
 
-                foreach (AnalysisMode mode in modesToExecute)
+                foreach (MediaSegmentType mode in modesToExecute)
                 {
                     var analyzed = AnalyzeItems(episodes, mode, cancellationToken);
                     Interlocked.Add(ref totalProcessed, analyzed);
@@ -140,12 +141,12 @@ public class BaseItemAnalyzer
     /// Analyze a group of media items for skippable segments.
     /// </summary>
     /// <param name="items">Media items to analyze.</param>
-    /// <param name="mode">The <see cref="AnalysisMode"/>.</param>
+    /// <param name="mode">The <see cref="MediaSegmentType"/>.</param>
     /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
     /// <returns>Number of items that were successfully analyzed.</returns>
     private int AnalyzeItems(
         ReadOnlyCollection<QueuedEpisode> items,
-        AnalysisMode mode,
+        MediaSegmentType mode,
         CancellationToken cancellationToken)
     {
         var totalItems = items.Count;
@@ -169,7 +170,7 @@ public class BaseItemAnalyzer
             _chromaprintAnalyzer
         };
 
-        if (mode == AnalysisMode.Credits)
+        if (mode == MediaSegmentType.Outro)
         {
             analyzers.Add(_blackFrameAnalyzer);
         }

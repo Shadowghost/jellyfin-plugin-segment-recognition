@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -32,7 +33,7 @@ public class DetectIntroductionsTask : IScheduledTask
     {
         _loggerFactory = loggerFactory;
         _baseItemAnalyzer = new BaseItemAnalyzer(
-            [AnalysisMode.Credits],
+            [MediaSegmentType.Outro],
             queueManager,
             _loggerFactory.CreateLogger<DetectCreditsTask>(),
             chapterAnalyzer,
@@ -48,7 +49,7 @@ public class DetectIntroductionsTask : IScheduledTask
     /// <summary>
     /// Gets the task category.
     /// </summary>
-    public string Category => "Intro Skipper";
+    public string Category => "Media Segments";
 
     /// <summary>
     /// Gets the task description.
@@ -58,7 +59,7 @@ public class DetectIntroductionsTask : IScheduledTask
     /// <summary>
     /// Gets the task key.
     /// </summary>
-    public string Key => "CPBIntroSkipperDetectIntroductions";
+    public string Key => "IntroSegmentRecognition";
 
     /// <summary>
     /// Analyze all episodes in the queue. Only one instance of this task should be run at a time.

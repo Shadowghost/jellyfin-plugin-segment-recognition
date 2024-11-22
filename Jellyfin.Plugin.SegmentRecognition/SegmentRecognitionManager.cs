@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -47,7 +48,7 @@ public class SegmentRecognitionManager : IHostedService
         _logger = logger;
 
         _analyzer = new BaseItemAnalyzer(
-            [AnalysisMode.Introduction, AnalysisMode.Credits],
+            [MediaSegmentType.Intro, MediaSegmentType.Outro],
             queueManager,
             logger,
             chapterAnalyzer,

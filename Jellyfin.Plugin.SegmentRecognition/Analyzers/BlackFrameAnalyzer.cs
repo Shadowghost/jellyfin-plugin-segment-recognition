@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
+using Jellyfin.Data.Enums;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
@@ -29,12 +30,12 @@ public class BlackFrameAnalyzer : IMediaFileAnalyzer
     /// <inheritdoc />
     public ReadOnlyCollection<QueuedEpisode> AnalyzeMediaFiles(
         ReadOnlyCollection<QueuedEpisode> analysisQueue,
-        AnalysisMode mode,
+        MediaSegmentType mode,
         CancellationToken cancellationToken)
     {
-        if (mode != AnalysisMode.Credits)
+        if (mode != MediaSegmentType.Outro)
         {
-            throw new NotImplementedException("mode must equal Credits");
+            throw new NotImplementedException("Mode needs to be Outro");
         }
 
         var creditTimes = new Dictionary<Guid, Intro>();
@@ -74,7 +75,7 @@ public class BlackFrameAnalyzer : IMediaFileAnalyzer
     /// <param name="mode">Analysis mode.</param>
     /// <param name="minimum">Percentage of the frame that must be black.</param>
     /// <returns>Credits timestamp.</returns>
-    public Intro? AnalyzeMediaFile(QueuedEpisode episode, AnalysisMode mode, int minimum)
+    public Intro? AnalyzeMediaFile(QueuedEpisode episode, MediaSegmentType mode, int minimum)
     {
         var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
 

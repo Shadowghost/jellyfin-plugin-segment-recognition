@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Mime;
+using Jellyfin.Data.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -111,7 +112,7 @@ public class VisualizationController : ControllerBase
             {
                 if (needle.EpisodeId == id)
                 {
-                    return FFmpegWrapper.Fingerprint(needle, AnalysisMode.Introduction);
+                    return FFmpegWrapper.Fingerprint(needle, MediaSegmentType.Intro);
                 }
             }
         }

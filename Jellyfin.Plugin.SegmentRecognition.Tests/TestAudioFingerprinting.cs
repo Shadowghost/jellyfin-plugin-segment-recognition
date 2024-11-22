@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using Xunit;
 using Microsoft.Extensions.Logging;
+using Jellyfin.Data.Enums;
 
 namespace Jellyfin.Plugin.SegmentRecognition.Tests;
 
@@ -73,7 +74,7 @@ public class TestAudioFingerprinting
 
         var actual = FFmpegWrapper.Fingerprint(
             queueEpisode("audio/big_buck_bunny_intro.mp3"),
-            AnalysisMode.Introduction);
+            MediaSegmentType.Intro);
 
         Assert.Equal(expected, actual);
     }
@@ -98,7 +99,7 @@ public class TestAudioFingerprinting
 
         var chromaprint = CreateChromaprintAnalyzer();
 
-        var actual = chromaprint.CreateInvertedIndex(Guid.NewGuid(), fpr, AnalysisMode.Introduction);
+        var actual = chromaprint.CreateInvertedIndex(Guid.NewGuid(), fpr, MediaSegmentType.Intro);
 
         Assert.Equal(expected, actual);
     }
@@ -110,7 +111,7 @@ public class TestAudioFingerprinting
     public void TestIntroDetection()
     {
         var chromaprint = CreateChromaprintAnalyzer();
-        var mode = AnalysisMode.Introduction;
+        var mode = MediaSegmentType.Intro;
 
         var lhsEpisode = queueEpisode("audio/big_buck_bunny_intro.mp3");
         var rhsEpisode = queueEpisode("audio/big_buck_bunny_clip.mp3");

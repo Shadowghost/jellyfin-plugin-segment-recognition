@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -29,12 +30,12 @@ public class ChapterAnalyzer : IMediaFileAnalyzer
     /// <inheritdoc />
     public ReadOnlyCollection<QueuedEpisode> AnalyzeMediaFiles(
         ReadOnlyCollection<QueuedEpisode> analysisQueue,
-        AnalysisMode mode,
+        MediaSegmentType mode,
         CancellationToken cancellationToken)
     {
         var skippableRanges = new Dictionary<Guid, Intro>();
 
-        var expression = mode == AnalysisMode.Introduction ?
+        var expression = mode == MediaSegmentType.Intro ?
             Plugin.Instance!.Configuration.ChapterAnalyzerIntroductionPattern :
             Plugin.Instance!.Configuration.ChapterAnalyzerEndCreditsPattern;
 
@@ -85,18 +86,18 @@ public class ChapterAnalyzer : IMediaFileAnalyzer
         QueuedEpisode episode,
         Collection<ChapterInfo> chapters,
         string expression,
-        AnalysisMode mode)
+        MediaSegmentType mode)
     {
         Intro? matchingChapter = null;
 
         var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
 
         var minDuration = config.MinimumIntroDuration;
-        int maxDuration = mode == AnalysisMode.Introduction ?
+        int maxDuration = mode == MediaSegmentType.Intro ?
             config.MaximumIntroDuration :
             config.MaximumEpisodeCreditsDuration;
 
-        if (mode == AnalysisMode.Credits)
+        if (mode == MediaSegmentType.Outro)
         {
             // Since the ending credits chapter may be the last chapter in the file, append a virtual
             // chapter at the very end of the file.

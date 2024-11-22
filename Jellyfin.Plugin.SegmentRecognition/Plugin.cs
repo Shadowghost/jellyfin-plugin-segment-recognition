@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -78,6 +79,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             _logger.LogWarning("Unable to load introduction timestamps: {Exception}", ex);
         }
+
+        // Validate FFmpeg
+        FFmpegWrapper.CheckFFmpegVersion();
     }
 
     /// <summary>
@@ -91,9 +95,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public Dictionary<Guid, Intro> Intros { get; } = [];
 
     /// <summary>
-    /// Gets all discovered ending credits.
+    /// Gets all discovered outros.
     /// </summary>
-    public Dictionary<Guid, Intro> Credits { get; } = [];
+    public Dictionary<Guid, Intro> Outro { get; } = [];
 
     /// <summary>
     /// Gets the most recent media item queue.
@@ -141,7 +145,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             var introList = new List<Intro>();
 
             // Serialize intros
-            foreach (var intro in Plugin.Instance!.Intros)
+            foreach (var intro in Instance!.Intros)
             {
                 introList.Add(intro.Value);
             }
@@ -151,7 +155,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             // Serialize credits
             introList.Clear();
 
-            foreach (var intro in Plugin.Instance!.Credits)
+            foreach (var intro in Instance!.Outro)
             {
                 introList.Add(intro.Value);
             }
@@ -174,7 +178,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
             foreach (var intro in introList)
             {
-                Plugin.Instance!.Intros[intro.EpisodeId] = intro;
+                Instance!.Intros[intro.EpisodeId] = intro;
             }
         }
 
@@ -186,7 +190,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
             foreach (var credit in creditList)
             {
-                Plugin.Instance!.Credits[credit.EpisodeId] = credit;
+                Instance!.Outro[credit.EpisodeId] = credit;
             }
         }
     }
@@ -263,23 +267,23 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         return _itemRepository.GetChapters(GetItem(id));
     }
 
-    internal void UpdateTimestamps(Dictionary<Guid, Intro> newTimestamps, AnalysisMode mode)
+    internal void UpdateTimestamps(Dictionary<Guid, Intro> newTimestamps, MediaSegmentType mode)
     {
         lock (_introsLock)
         {
             foreach (var intro in newTimestamps)
             {
-                if (mode == AnalysisMode.Introduction)
+                if (mode == MediaSegmentType.Intro)
                 {
-                    Plugin.Instance!.Intros[intro.Key] = intro.Value;
+                    Instance!.Intros[intro.Key] = intro.Value;
                 }
-                else if (mode == AnalysisMode.Credits)
+                else if (mode == MediaSegmentType.Outro)
                 {
-                    Plugin.Instance!.Credits[intro.Key] = intro.Value;
+                    Instance!.Outro[intro.Key] = intro.Value;
                 }
             }
 
-            Plugin.Instance!.SaveTimestamps();
+            Instance!.SaveTimestamps();
         }
     }
 
