@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Segment Recognition</title>
+</head>
+<body>
+    <div id="configPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+    <style>
+        #srConfigRoot {
+            padding: 4rem 1.5rem 5rem 5rem;
+            max-width: none;
+        }
+        #srConfigRoot .sr-page-title {
+            margin: 0 0 1.5rem 0;
+            font-size: 1.75rem;
+            font-weight: 500;
+        }
+        #srConfigRoot .sr-layout {
+            display: grid;
+            grid-template-columns: 12rem minmax(0, 1fr);
+            gap: 2.5rem;
+            align-items: start;
+        }
+        #srConfigRoot .sr-sidebar {
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 1rem;
+            align-self: start;
+        }
+        #srConfigRoot .sr-content {
+            /* Cap content width so 800px-wide emby-inputs stay readable */
+            min-width: 0;
+            max-width: 44rem;
+        }
+        /* Keep emby-input width sensible; don't let the control stretch full column */
+        #srConfigRoot .sr-content .emby-input,
+        #srConfigRoot .sr-content .emby-select,
+        #srConfigRoot .sr-content input[is="emby-input"],
+        #srConfigRoot .sr-content select[is="emby-select"] {
+            max-width: 28rem;
+        }
+        #srConfigRoot .sr-content .checkboxContainer {
+            /* Stack label and description vertically instead of the horizontal split
+               that looked awkward in the wider grid column. */
+            display: block;
+        }
+        #srConfigRoot .sr-content .fieldDescription {
+            margin-top: 0.35rem;
+            opacity: 0.75;
+        }
+        @media (max-width: 48rem) {
+            #srConfigRoot {
+                padding: 3.5rem 1rem 4rem 1rem;
+            }
+            #srConfigRoot .sr-layout {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 1rem;
+            }
+            #srConfigRoot .sr-sidebar {
+                position: static;
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 0.25rem;
+                padding-bottom: 0.5rem;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            }
+        }
+        #srConfigRoot .sr-tab {
+            display: block;
+            padding: 0.55rem 0.75rem;
+            margin: 0;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.3;
+            text-align: left;
+            opacity: 0.75;
+            cursor: pointer;
+            user-select: none;
+            outline: none;
+            transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+        }
+        #srConfigRoot .sr-tab:hover,
+        #srConfigRoot .sr-tab:focus-visible {
+            background: rgba(255, 255, 255, 0.05);
+            opacity: 1;
+        }
+        #srConfigRoot .sr-tab.is-active {
+            background: color-mix(in srgb, var(--theme-primary-color, #00a4dc) 15%, transparent);
+            color: var(--theme-primary-color, #00a4dc);
+            font-weight: 600;
+            opacity: 1;
+        }
+        #srConfigRoot .sr-panel {
+            display: none;
+        }
+        #srConfigRoot .sr-panel.is-active {
+            display: block;
+        }
+        #srConfigRoot .sr-panel-header {
+            margin: 0 0 1.25rem 0;
+        }
+        #srConfigRoot .sr-panel-header h2 {
+            margin: 0 0 0.25rem 0;
+            font-size: 1.25rem;
+            font-weight: 500;
+        }
+        #srConfigRoot .sr-panel-hint {
+            margin: 0;
+            opacity: 0.7;
+            font-size: 0.95rem;
+        }
+        #srConfigRoot .sr-panel > fieldset:first-of-type {
+            margin-top: 0;
+        }
+        #srConfigRoot .sr-save-row {
+            margin-top: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        #srConfigRoot .sr-save-row > #srSaveButton {
+            /* Fixed-width, centered button. Content centered horizontally inside. */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 70%;
+            max-width: 30rem;
+            margin: 0;
+            text-align: center;
+        }
+        #srConfigRoot .sr-save-row > #srSaveButton > span {
+            width: 100%;
+            text-align: center;
+        }
+    </style>
+        <div data-role="content">
+            <div id="srConfigRoot" data-sr-version="2026-04-15-conditional-tabs">
+                <h1 class="sr-page-title">Segment Recognition</h1>
+                <div class="sr-layout">
+                    <nav class="sr-sidebar sr-tablist" role="tablist" aria-label="Segment Recognition settings">
+                        <div class="sr-tab is-active" data-tab="general" role="tab" tabindex="0" aria-selected="true">General</div>
+                        <div class="sr-tab" data-tab="detection" role="tab" tabindex="0" aria-selected="false">Detection</div>
+                        <div class="sr-tab" data-tab="refinement" role="tab" tabindex="0" aria-selected="false">Refinement</div>
+                        <div class="sr-tab" data-tab="blackframe" role="tab" tabindex="0" aria-selected="false" data-show-when="chkEnableBlackFrameProvider">Black Frame</div>
+                        <div class="sr-tab" data-tab="chapters" role="tab" tabindex="0" aria-selected="false" data-show-when="chkEnableChapterNameProvider">Chapters</div>
+                        <div class="sr-tab" data-tab="chromaprint" role="tab" tabindex="0" aria-selected="false" data-show-when="chkEnableChromaprintProvider">Chromaprint</div>
+                    </nav>
+
+                    <div class="sr-content">
+                            <section class="sr-panel is-active" data-panel="general" role="tabpanel" aria-labelledby="tab-general">
+                                <div class="sr-panel-header">
+                                    <h2>General</h2>
+                                    <p class="sr-panel-hint">Top-level task controls and which providers are enabled.</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Task Settings</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkForceRegenerate" />
+                                            <span>Force Regenerate</span>
+                                        </label>
+                                        <div class="fieldDescription">Recreate all Jellyfin media segments from cached analysis data on next scheduled task run. Resets automatically after completion.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxParallelGroups">Max Parallel Groups</label>
+                                        <input id="txtMaxParallelGroups" type="number" is="emby-input" min="1" max="16" step="1" />
+                                        <div class="fieldDescription">Number of season/album groups to process in parallel during chromaprint comparison (default: 2).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Providers</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableChapterNameProvider" />
+                                            <span>Enable Chapter Name Provider</span>
+                                        </label>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableBlackFrameProvider" />
+                                            <span>Enable Black Frame Provider</span>
+                                        </label>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableChromaprintProvider" />
+                                            <span>Enable Chromaprint Provider</span>
+                                        </label>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnablePreviewInference" />
+                                            <span>Enable Preview Inference</span>
+                                        </label>
+                                        <div class="fieldDescription">When a detected outro/credits ends before the episode ends, mark the remaining portion as a Preview segment. Requires credits fingerprinting. Tune the min/max thresholds on the Detection tab.</div>
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section class="sr-panel" data-panel="detection" role="tabpanel" aria-labelledby="tab-detection" hidden>
+                                <div class="sr-panel-header">
+                                    <h2>Detection</h2>
+                                    <p class="sr-panel-hint">Where in each file the analyzers scan and how long a valid segment can be.</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Analysis Regions</legend>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtIntroAnalysisPercent">Intro Analysis Region (%)</label>
+                                        <input id="txtIntroAnalysisPercent" type="number" is="emby-input" min="1" max="100" step="1" />
+                                        <div class="fieldDescription">Percentage of the episode to scan from the start for intro detection (default: 25%).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtOutroAnalysisSeconds">Outro Analysis Region (seconds)</label>
+                                        <input id="txtOutroAnalysisSeconds" type="number" is="emby-input" min="30" step="10" />
+                                        <div class="fieldDescription">Duration from the end of the episode to scan for outro detection (default: 240s).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Segment Duration Limits</legend>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMinIntroDuration">Minimum Intro Duration (seconds)</label>
+                                        <input id="txtMinIntroDuration" type="number" is="emby-input" min="1" step="1" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxIntroDuration">Maximum Intro Duration (seconds)</label>
+                                        <input id="txtMaxIntroDuration" type="number" is="emby-input" min="1" step="1" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMinOutroDuration">Minimum Outro Duration (seconds)</label>
+                                        <input id="txtMinOutroDuration" type="number" is="emby-input" min="1" step="1" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxOutroDuration">Maximum Outro Duration (seconds)</label>
+                                        <input id="txtMaxOutroDuration" type="number" is="emby-input" min="1" step="1" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxMovieOutroDuration">Maximum Movie Outro Duration (seconds)</label>
+                                        <input id="txtMaxMovieOutroDuration" type="number" is="emby-input" min="1" step="1" />
+                                        <div class="fieldDescription">Movie credits are typically much longer than TV episode credits (default: 900).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMinCommercialDuration">Minimum Commercial Duration (seconds)</label>
+                                        <input id="txtMinCommercialDuration" type="number" is="emby-input" min="1" step="1" />
+                                        <div class="fieldDescription">Shortest commercial break to accept (default: 5).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxCommercialDuration">Maximum Commercial Duration (seconds)</label>
+                                        <input id="txtMaxCommercialDuration" type="number" is="emby-input" min="1" step="1" />
+                                        <div class="fieldDescription">Longest commercial break to accept (default: 180).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection" data-show-when="chkEnablePreviewInference">
+                                    <legend>Preview Inference</legend>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMinPreviewDuration">Minimum Preview Duration (seconds)</label>
+                                        <input id="txtMinPreviewDuration" type="number" is="emby-input" min="0" step="1" />
+                                        <div class="fieldDescription">Trailing portions shorter than this are absorbed into the outro instead of becoming a Preview segment (default: 10s).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtMaxPreviewDuration">Maximum Preview Duration (seconds)</label>
+                                        <input id="txtMaxPreviewDuration" type="number" is="emby-input" min="0" step="1" />
+                                        <div class="fieldDescription">Trailing portions longer than this are left untouched (probably a post-credits scene, not a teaser) (default: 45s).</div>
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section class="sr-panel" data-panel="refinement" role="tabpanel" aria-labelledby="tab-refinement" hidden>
+                                <div class="sr-panel-header">
+                                    <h2>Refinement</h2>
+                                    <p class="sr-panel-hint">Snap detected boundaries to silence gaps or keyframes for cleaner cuts.</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Silence Snapping</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableSilenceRefinement" />
+                                            <span>Enable Silence Refinement</span>
+                                        </label>
+                                        <div class="fieldDescription">Snap segment boundaries to nearby silence gaps for more natural transitions.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtSilenceDetectNoisedB">Silence Noise Floor (dB)</label>
+                                        <input id="txtSilenceDetectNoisedB" type="number" is="emby-input" min="-90" max="0" step="1" />
+                                        <div class="fieldDescription">Noise threshold in dB for silence detection (default: -50).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtSilenceDetectMinDuration">Silence Min Duration (seconds)</label>
+                                        <input id="txtSilenceDetectMinDuration" type="number" is="emby-input" min="0.1" max="5" step="0.01" />
+                                        <div class="fieldDescription">Minimum silence duration in seconds to be considered a gap (default: 0.33).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtSilenceSnapInward">Silence Snap Inward (seconds)</label>
+                                        <input id="txtSilenceSnapInward" type="number" is="emby-input" min="0.5" max="30" step="0.5" />
+                                        <div class="fieldDescription">Inward search window (toward segment center) for silence snapping (default: 5.0).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtSilenceSnapOutward">Silence Snap Outward (seconds)</label>
+                                        <input id="txtSilenceSnapOutward" type="number" is="emby-input" min="0.5" max="30" step="0.5" />
+                                        <div class="fieldDescription">Outward search window (away from segment center) for silence snapping (default: 2.0).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Keyframe Snapping</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableKeyframeSnapping" />
+                                            <span>Enable Keyframe Snapping</span>
+                                        </label>
+                                        <div class="fieldDescription">Snap segment boundaries to nearby video keyframes for clean cuts.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtKeyframeSnapWindow">Keyframe Snap Window (seconds)</label>
+                                        <input id="txtKeyframeSnapWindow" type="number" is="emby-input" min="0.5" max="30" step="0.5" />
+                                        <div class="fieldDescription">Maximum distance from boundary to search for keyframes (default: 3.0).</div>
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section class="sr-panel" data-panel="blackframe" role="tabpanel" aria-labelledby="tab-blackframe" hidden data-show-when="chkEnableBlackFrameProvider">
+                                <div class="sr-panel-header">
+                                    <h2>Black Frame</h2>
+                                    <p class="sr-panel-hint">ffmpeg-based black-frame detection settings.</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Black Frame Settings</legend>
+                                    <div class="selectContainer">
+                                        <label class="selectLabel" for="selBlackFrameAnalysisHeight">Analysis Resolution</label>
+                                        <select id="selBlackFrameAnalysisHeight" is="emby-select">
+                                            <option value="480">480p (default, fastest)</option>
+                                            <option value="720">720p</option>
+                                            <option value="0">Native (no downscaling)</option>
+                                        </select>
+                                        <div class="fieldDescription">Frames are downscaled to this height before analysis. Lower = faster. Uses GPU-side scaling when hardware acceleration is available.</div>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkReanalyzeBlackFrames" />
+                                            <span>Re-analyze Black Frames</span>
+                                        </label>
+                                        <div class="fieldDescription">Clear all cached black frame data and re-analyze on the next task run. Useful after changing the analysis resolution. Resets automatically.</div>
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section class="sr-panel" data-panel="chapters" role="tabpanel" aria-labelledby="tab-chapters" hidden data-show-when="chkEnableChapterNameProvider">
+                                <div class="sr-panel-header">
+                                    <h2>Chapters</h2>
+                                    <p class="sr-panel-hint">Names matched against chapter titles. Matching uses whole-word comparison, so "Intro" matches a chapter named "Intro" but not "Introduction to Characters".</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Chapter Name Patterns</legend>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtIntroChapterNames">Intro Chapter Names (comma-separated)</label>
+                                        <input id="txtIntroChapterNames" type="text" is="emby-input" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtOutroChapterNames">Outro Chapter Names (comma-separated)</label>
+                                        <input id="txtOutroChapterNames" type="text" is="emby-input" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtRecapChapterNames">Recap Chapter Names (comma-separated)</label>
+                                        <input id="txtRecapChapterNames" type="text" is="emby-input" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtPreviewChapterNames">Preview Chapter Names (comma-separated)</label>
+                                        <input id="txtPreviewChapterNames" type="text" is="emby-input" />
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtCommercialChapterNames">Commercial Chapter Names (comma-separated)</label>
+                                        <input id="txtCommercialChapterNames" type="text" is="emby-input" />
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                            <section class="sr-panel" data-panel="chromaprint" role="tabpanel" aria-labelledby="tab-chromaprint" hidden data-show-when="chkEnableChromaprintProvider">
+                                <div class="sr-panel-header">
+                                    <h2>Chromaprint</h2>
+                                    <p class="sr-panel-hint">Audio-fingerprint settings used for cross-episode intro and credits matching.</p>
+                                </div>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Credits Fingerprinting</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableCreditsFingerprinting" />
+                                            <span>Enable Credits Fingerprinting</span>
+                                        </label>
+                                        <div class="fieldDescription">Compare audio fingerprints from the end of episodes to detect credits/outro segments.</div>
+                                    </div>
+                                    <div class="inputContainer" data-show-when="chkEnableCreditsFingerprinting">
+                                        <label class="inputLabel" for="txtCreditsAnalysisDuration">Credits Analysis Duration (seconds)</label>
+                                        <input id="txtCreditsAnalysisDuration" type="number" is="emby-input" min="30" step="10" />
+                                        <div class="fieldDescription">Duration from the end of the episode to fingerprint for credits detection (default: 240).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection">
+                                    <legend>Matching</legend>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtChromaprintAnalysisDuration">Max Analysis Duration (seconds)</label>
+                                        <input id="txtChromaprintAnalysisDuration" type="number" is="emby-input" min="10" step="10" />
+                                        <div class="fieldDescription">Maximum duration to fingerprint (capped to the intro analysis region).</div>
+                                    </div>
+                                    <div class="fieldDescription" style="margin-top: 0.5rem;">
+                                        The minimum match length is driven by <b>Minimum Intro Duration</b> (intro pass) and
+                                        <b>Minimum Outro Duration</b> (credits pass) on the Detection tab.
+                                    </div>
+                                </fieldset>
+                            </section>
+
+                        <div class="sr-save-row">
+                            <button id="srSaveButton" is="emby-button" type="button" class="raised button-submit"><span>Save</span></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script type="text/javascript">
+            var SegmentRecognitionPluginConfig = {
+                pluginId: "b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e",
+                tabStorageKey: "segmentRecognition.activeTab"
+            };
+
+            function applyConditionalVisibility() {
+                document.querySelectorAll('#configPage [data-show-when]').forEach(function (el) {
+                    var checkbox = document.getElementById(el.getAttribute('data-show-when'));
+                    var visible = checkbox ? checkbox.checked : true;
+                    el.style.display = visible ? '' : 'none';
+                });
+
+                var activeTab = document.querySelector('#configPage .sr-tab.is-active');
+                if (activeTab && activeTab.style.display === 'none') {
+                    activateSegmentRecognitionTab('general');
+                }
+            }
+
+            function activateSegmentRecognitionTab(name) {
+                var tabs = document.querySelectorAll('#configPage .sr-tab');
+                var panels = document.querySelectorAll('#configPage .sr-panel');
+                var matched = false;
+                tabs.forEach(function (t) {
+                    var active = t.dataset.tab === name;
+                    t.classList.toggle('is-active', active);
+                    t.setAttribute('aria-selected', active ? 'true' : 'false');
+                    if (active) matched = true;
+                });
+                panels.forEach(function (p) {
+                    var active = p.dataset.panel === name;
+                    p.classList.toggle('is-active', active);
+                    if (active) {
+                        p.removeAttribute('hidden');
+                    } else {
+                        p.setAttribute('hidden', '');
+                    }
+                });
+                if (matched) {
+                    try { localStorage.setItem(SegmentRecognitionPluginConfig.tabStorageKey, name); } catch (e) { /* private mode */ }
+                }
+            }
+
+            document.querySelectorAll('#configPage .sr-tab').forEach(function (tab) {
+                tab.addEventListener('click', function () {
+                    activateSegmentRecognitionTab(tab.dataset.tab);
+                });
+                tab.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        activateSegmentRecognitionTab(tab.dataset.tab);
+                    }
+                });
+            });
+
+            document.getElementById('configPage')
+                .addEventListener('pageshow', function () {
+                    var remembered = null;
+                    try { remembered = localStorage.getItem(SegmentRecognitionPluginConfig.tabStorageKey); } catch (e) { /* private mode */ }
+                    if (remembered) {
+                        activateSegmentRecognitionTab(remembered);
+                    }
+
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(SegmentRecognitionPluginConfig.pluginId).then(function (config) {
+                        document.getElementById('chkForceRegenerate').checked = config.ForceRegenerate;
+                        document.getElementById('txtMaxParallelGroups').value = config.MaxParallelGroups;
+                        document.getElementById('chkEnableChapterNameProvider').checked = config.EnableChapterNameProvider;
+                        document.getElementById('chkEnableBlackFrameProvider').checked = config.EnableBlackFrameProvider;
+                        document.getElementById('chkEnableChromaprintProvider').checked = config.EnableChromaprintProvider;
+                        document.getElementById('chkEnableCreditsFingerprinting').checked = config.EnableCreditsFingerprinting;
+                        document.getElementById('txtCreditsAnalysisDuration').value = config.CreditsAnalysisDurationSeconds;
+                        document.getElementById('chkEnablePreviewInference').checked = config.EnablePreviewInference;
+                        document.getElementById('txtMinPreviewDuration').value = config.MinPreviewDurationSeconds;
+                        document.getElementById('txtMaxPreviewDuration').value = config.MaxPreviewDurationSeconds;
+                        document.getElementById('selBlackFrameAnalysisHeight').value = config.BlackFrameAnalysisHeight;
+                        document.getElementById('chkReanalyzeBlackFrames').checked = config.ReanalyzeBlackFrames;
+                        document.getElementById('txtMinIntroDuration').value = config.MinIntroDurationSeconds;
+                        document.getElementById('txtMaxIntroDuration').value = config.MaxIntroDurationSeconds;
+                        document.getElementById('txtMinOutroDuration').value = config.MinOutroDurationSeconds;
+                        document.getElementById('txtMaxOutroDuration').value = config.MaxOutroDurationSeconds;
+                        document.getElementById('txtMaxMovieOutroDuration').value = config.MaxMovieOutroDurationSeconds;
+                        document.getElementById('txtMinCommercialDuration').value = config.MinCommercialDurationSeconds;
+                        document.getElementById('txtMaxCommercialDuration').value = config.MaxCommercialDurationSeconds;
+                        document.getElementById('txtIntroAnalysisPercent').value = Math.round(config.IntroAnalysisPercent * 100);
+                        document.getElementById('txtOutroAnalysisSeconds').value = config.OutroAnalysisSeconds;
+                        document.getElementById('chkEnableSilenceRefinement').checked = config.EnableSilenceRefinement;
+                        document.getElementById('txtSilenceDetectNoisedB').value = config.SilenceDetectNoisedB;
+                        document.getElementById('txtSilenceDetectMinDuration').value = config.SilenceDetectMinDurationSeconds;
+                        document.getElementById('txtSilenceSnapInward').value = config.SilenceSnapInwardSeconds;
+                        document.getElementById('txtSilenceSnapOutward').value = config.SilenceSnapOutwardSeconds;
+                        document.getElementById('chkEnableKeyframeSnapping').checked = config.EnableKeyframeSnapping;
+                        document.getElementById('txtKeyframeSnapWindow').value = config.KeyframeSnapWindowSeconds;
+                        document.getElementById('txtIntroChapterNames').value = (config.IntroChapterNames || []).join(', ');
+                        document.getElementById('txtOutroChapterNames').value = (config.OutroChapterNames || []).join(', ');
+                        document.getElementById('txtRecapChapterNames').value = (config.RecapChapterNames || []).join(', ');
+                        document.getElementById('txtPreviewChapterNames').value = (config.PreviewChapterNames || []).join(', ');
+                        document.getElementById('txtCommercialChapterNames').value = (config.CommercialChapterNames || []).join(', ');
+                        document.getElementById('txtChromaprintAnalysisDuration').value = config.ChromaprintAnalysisDurationSeconds;
+                        applyConditionalVisibility();
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            ['chkEnableChapterNameProvider',
+             'chkEnableBlackFrameProvider',
+             'chkEnableChromaprintProvider',
+             'chkEnablePreviewInference',
+             'chkEnableCreditsFingerprinting'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', applyConditionalVisibility);
+                }
+            });
+
+            function parseCommaSeparated(value) {
+                return value.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+            }
+
+            document.getElementById('srSaveButton')
+                .addEventListener('click', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+
+                    ApiClient.getPluginConfiguration(SegmentRecognitionPluginConfig.pluginId).then(function (config) {
+                        config.ForceRegenerate = document.getElementById('chkForceRegenerate').checked;
+                        config.MaxParallelGroups = parseInt(document.getElementById('txtMaxParallelGroups').value, 10);
+                        config.EnableChapterNameProvider = document.getElementById('chkEnableChapterNameProvider').checked;
+                        config.EnableBlackFrameProvider = document.getElementById('chkEnableBlackFrameProvider').checked;
+                        config.EnableChromaprintProvider = document.getElementById('chkEnableChromaprintProvider').checked;
+                        config.EnableCreditsFingerprinting = document.getElementById('chkEnableCreditsFingerprinting').checked;
+                        config.CreditsAnalysisDurationSeconds = parseInt(document.getElementById('txtCreditsAnalysisDuration').value, 10);
+                        config.EnablePreviewInference = document.getElementById('chkEnablePreviewInference').checked;
+                        config.MinPreviewDurationSeconds = parseInt(document.getElementById('txtMinPreviewDuration').value, 10);
+                        config.MaxPreviewDurationSeconds = parseInt(document.getElementById('txtMaxPreviewDuration').value, 10);
+                        config.BlackFrameAnalysisHeight = parseInt(document.getElementById('selBlackFrameAnalysisHeight').value, 10);
+                        config.ReanalyzeBlackFrames = document.getElementById('chkReanalyzeBlackFrames').checked;
+                        config.MinIntroDurationSeconds = parseInt(document.getElementById('txtMinIntroDuration').value, 10);
+                        config.MaxIntroDurationSeconds = parseInt(document.getElementById('txtMaxIntroDuration').value, 10);
+                        config.MinOutroDurationSeconds = parseInt(document.getElementById('txtMinOutroDuration').value, 10);
+                        config.MaxOutroDurationSeconds = parseInt(document.getElementById('txtMaxOutroDuration').value, 10);
+                        config.MaxMovieOutroDurationSeconds = parseInt(document.getElementById('txtMaxMovieOutroDuration').value, 10);
+                        config.MinCommercialDurationSeconds = parseInt(document.getElementById('txtMinCommercialDuration').value, 10);
+                        config.MaxCommercialDurationSeconds = parseInt(document.getElementById('txtMaxCommercialDuration').value, 10);
+                        config.IntroAnalysisPercent = parseInt(document.getElementById('txtIntroAnalysisPercent').value, 10) / 100.0;
+                        config.OutroAnalysisSeconds = parseInt(document.getElementById('txtOutroAnalysisSeconds').value, 10);
+                        config.EnableSilenceRefinement = document.getElementById('chkEnableSilenceRefinement').checked;
+                        config.SilenceDetectNoisedB = parseInt(document.getElementById('txtSilenceDetectNoisedB').value, 10);
+                        config.SilenceDetectMinDurationSeconds = parseFloat(document.getElementById('txtSilenceDetectMinDuration').value);
+                        config.SilenceSnapInwardSeconds = parseFloat(document.getElementById('txtSilenceSnapInward').value);
+                        config.SilenceSnapOutwardSeconds = parseFloat(document.getElementById('txtSilenceSnapOutward').value);
+                        config.EnableKeyframeSnapping = document.getElementById('chkEnableKeyframeSnapping').checked;
+                        config.KeyframeSnapWindowSeconds = parseFloat(document.getElementById('txtKeyframeSnapWindow').value);
+                        config.IntroChapterNames = parseCommaSeparated(document.getElementById('txtIntroChapterNames').value);
+                        config.OutroChapterNames = parseCommaSeparated(document.getElementById('txtOutroChapterNames').value);
+                        config.RecapChapterNames = parseCommaSeparated(document.getElementById('txtRecapChapterNames').value);
+                        config.PreviewChapterNames = parseCommaSeparated(document.getElementById('txtPreviewChapterNames').value);
+                        config.CommercialChapterNames = parseCommaSeparated(document.getElementById('txtCommercialChapterNames').value);
+                        config.ChromaprintAnalysisDurationSeconds = parseInt(document.getElementById('txtChromaprintAnalysisDuration').value, 10);
+                        ApiClient.updatePluginConfiguration(SegmentRecognitionPluginConfig.pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
+                    });
+                });
+        </script>
+    </div>
+</body>
+</html>

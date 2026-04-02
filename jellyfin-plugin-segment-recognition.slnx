@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Jellyfin.Plugin.SegmentRecognition/Jellyfin.Plugin.SegmentRecognition.csproj" />
+  <Project Path="Jellyfin.Plugin.SegmentRecognition.Tests/Jellyfin.Plugin.SegmentRecognition.Tests.csproj" />
+</Solution>
