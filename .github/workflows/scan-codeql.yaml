@@ -1,0 +1,25 @@
+name: 'Run CodeQL'
+
+permissions:
+  contents: read
+  security-events: write
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+  schedule:
+    - cron: '24 2 * * 4'
+  workflow_dispatch:
+
+jobs:
+  scan-codeql:
+    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/scan-codeql.yaml@master
+    with:
+      repository-name: Shadowghost/jellyfin-plugin-segment-recognition
+      dotnet-version: "10.0.x"

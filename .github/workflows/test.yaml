@@ -1,0 +1,27 @@
+name: 'Test Plugin'
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - unstable
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches:
+      - master
+      - main
+      - unstable
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+jobs:
+  test:
+    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/test.yaml@master
+    with:
+      dotnet-version: "10.0.x"

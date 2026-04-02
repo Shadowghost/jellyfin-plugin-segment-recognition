@@ -1,0 +1,28 @@
+name: 'Build Plugin'
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - unstable
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches:
+      - master
+      - main
+      - unstable
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/build.yaml@master
+    with:
+      dotnet-version: "10.0.x"
+      dotnet-target: "net10.0"

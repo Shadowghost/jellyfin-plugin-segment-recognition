@@ -1,0 +1,15 @@
+name: "Segment Recognition"
+guid: "b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e"
+version: "1.0.0.0"
+targetAbi: "10.12.0.0"
+framework: "net10.0"
+overview: "Automatically detects and manages media segments (intros, outros, recaps, previews)"
+description: >
+  Recognizes and manages media segments using chapter name matching, black frame detection,
+  chromaprint audio fingerprinting, and EDL import. Supports hardware-accelerated decoding,
+  silence/chapter/keyframe boundary refinement, and incremental processing.
+category: "Metadata"
+owner: "Shadowghost"
+artifacts:
+  - "Jellyfin.Plugin.SegmentRecognition.dll"
+changelog: ""
