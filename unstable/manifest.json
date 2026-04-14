@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "guid": "b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e",
+    "name": "Segment Recognition",
+    "description": "Recognizes and manages media segments using chapter name matching, black frame detection, chromaprint audio fingerprinting, and EDL import. Supports hardware-accelerated decoding, silence/chapter/keyframe boundary refinement, and incremental processing.\n",
+    "overview": "Automatically detects and manages media segments (intros, outros, recaps, previews)",
+    "owner": "Shadowghost",
+    "category": "Metadata",
+    "versions": [
+      {
+        "version": "2026.4.14.0",
+        "changelog": "",
+        "targetAbi": "10.12.0.0",
+        "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable/segment-recognition_2026.4.14.0.zip",
+        "checksum": "a2a89d0f970356fa3e4748afdf0b280f",
+        "timestamp": "2026-04-14T08:13:44Z"
+      }
+    ]
+  }
+]
