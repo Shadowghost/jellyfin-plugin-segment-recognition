@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Data;
@@ -268,7 +269,11 @@ public class ImportIntroSkipperDataTask : IScheduledTask
                 _logger.LogInformation("Found intro-skipper config at {Path}", path);
                 break;
             }
-            catch (Exception ex)
+            catch (XmlException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse intro-skipper config at {Path}, using defaults", path);
+            }
+            catch (IOException ex)
             {
                 _logger.LogWarning(ex, "Failed to parse intro-skipper config at {Path}, using defaults", path);
             }

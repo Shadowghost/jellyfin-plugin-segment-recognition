@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -76,7 +77,15 @@ public class FfmpegChromaprintService
             {
                 process.PriorityClass = ProcessPriorityClass.BelowNormal;
             }
-            catch (Exception ex)
+            catch (Win32Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to set ffmpeg process priority to BelowNormal");
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Failed to set ffmpeg process priority to BelowNormal");
+            }
+            catch (NotSupportedException ex)
             {
                 _logger.LogWarning(ex, "Failed to set ffmpeg process priority to BelowNormal");
             }
