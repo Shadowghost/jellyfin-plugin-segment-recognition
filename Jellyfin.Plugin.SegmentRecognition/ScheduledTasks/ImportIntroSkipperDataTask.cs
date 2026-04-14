@@ -260,20 +260,17 @@ public class ImportIntroSkipperDataTask : IScheduledTask
         string[] candidates = ["IntroSkipper.xml", "ConfusedPolarBear.Plugin.IntroSkipper.xml"];
         XDocument? doc = null;
 
-        foreach (var path in candidates.Select(c => Path.Join(pluginConfigPath, c)))
+        foreach (var path in candidates.Select(c => Path.Join(pluginConfigPath, c)).Where(File.Exists))
         {
-            if (File.Exists(path))
+            try
             {
-                try
-                {
-                    doc = XDocument.Load(path);
-                    _logger.LogInformation("Found intro-skipper config at {Path}", path);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse intro-skipper config at {Path}, using defaults", path);
-                }
+                doc = XDocument.Load(path);
+                _logger.LogInformation("Found intro-skipper config at {Path}", path);
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse intro-skipper config at {Path}, using defaults", path);
             }
         }
 
