@@ -6,14 +6,15 @@
     "overview": "Automatically detects and manages media segments (intros, outros, recaps, previews)",
     "owner": "Shadowghost",
     "category": "Metadata",
+    "imageUrl": "https://raw.githubusercontent.com/Shadowghost/jellyfin-plugin-segment-recognition/refs/heads/main/images/jellyfin-plugin-segment-recognition.png",
     "versions": [
       {
         "version": "2026.4.14.0",
         "changelog": "",
         "targetAbi": "10.12.0.0",
         "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-latest/segment-recognition_2026.4.14.0.zip",
-        "checksum": "6a50a28f989f9568cb69840ffedf4bf6",
-        "timestamp": "2026-04-14T08:53:43Z"
+        "checksum": "eadf19601cca4870e17ad07fb32d8085",
+        "timestamp": "2026-04-14T09:54:40Z"
       }
     ]
   }
