@@ -127,24 +127,16 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         progress.Report(0);
 
-        // Enumerate seasons (with their episodes) and movies upfront so progress can be
-        // reported at item granularity even though work is dispatched per season.
-        var seasonEpisodes = new Dictionary<Guid, IReadOnlyList<BaseItem>>();
-        foreach (var sid in GetSeasonIds())
-        {
-            var eps = GetEpisodesInSeason(sid);
-            if (eps.Count > 0)
-            {
-                seasonEpisodes[sid] = eps;
-            }
-        }
-
+        // Iterate Series → (all episodes of series, grouped by SeasonId in memory).
+        // One episode query per series instead of one per season; total query count is bounded
+        // by the number of series rather than the number of seasons.
+        var seriesList = GetSeriesList();
         var movies = GetMovieList();
-        var totalItems = seasonEpisodes.Values.Sum(e => e.Count) + movies.Count;
+        var totalItems = GetEpisodeCount() + movies.Count;
 
         _logger.LogInformation(
-            "Found {Seasons} seasons ({Episodes} episodes) and {Movies} movies in library",
-            seasonEpisodes.Count,
+            "Found {Series} series (~{Episodes} episodes) and {Movies} movies in library",
+            seriesList.Count,
             totalItems - movies.Count,
             movies.Count);
 
@@ -164,24 +156,34 @@ public class AnalyzeSegmentsTask : IScheduledTask
             CancellationToken = cancellationToken
         };
 
-        // Process each season end-to-end: analyze every episode (chapters + blackframe + fingerprints),
-        // run the per-season chromaprint comparison if the season is dirty, then push.
-        await Parallel.ForEachAsync(seasonEpisodes, parallelOptions, async (entry, ct) =>
+        // Process each series in parallel; within a series, fetch all episodes once, group by
+        // SeasonId, and run each season end-to-end (analyze → chromaprint compare → push).
+        await Parallel.ForEachAsync(seriesList, parallelOptions, async (series, ct) =>
         {
-            await ProcessSeasonAsync(entry.Key, entry.Value, config, forceOverwrite, stats, ct).ConfigureAwait(false);
+            var seasonEpisodes = GroupEpisodesBySeason(GetEpisodesInSeries(series.Id));
+            if (seasonEpisodes.Count == 0)
+            {
+                return;
+            }
 
-            var current = Interlocked.Add(ref processed, entry.Value.Count);
-            progress.Report(Math.Min(99.0, 100.0 * current / totalItems));
+            foreach (var (seasonId, episodes) in seasonEpisodes)
+            {
+                ct.ThrowIfCancellationRequested();
+                await ProcessSeasonAsync(seasonId, episodes, config, forceOverwrite, stats, ct).ConfigureAwait(false);
 
-            _logger.LogDebug(
-                "Item progress: {Done}/{Total} ({ChapterNew} chapter, {BlackFrameNew} black frame, {Fingerprints} fingerprints, {Pushed} pushed, {Skipped} skipped)",
-                current,
-                totalItems,
-                stats.ChapterAnalyzed,
-                stats.BlackFrameAnalyzed,
-                stats.FingerprintsGenerated,
-                stats.Pushed,
-                stats.AnalysisSkipped);
+                var current = Interlocked.Add(ref processed, episodes.Count);
+                progress.Report(Math.Min(99.0, 100.0 * current / totalItems));
+
+                _logger.LogDebug(
+                    "Item progress: {Done}/{Total} ({ChapterNew} chapter, {BlackFrameNew} black frame, {Fingerprints} fingerprints, {Pushed} pushed, {Skipped} skipped)",
+                    current,
+                    totalItems,
+                    stats.ChapterAnalyzed,
+                    stats.BlackFrameAnalyzed,
+                    stats.FingerprintsGenerated,
+                    stats.Pushed,
+                    stats.AnalysisSkipped);
+            }
         }).ConfigureAwait(false);
 
         // Movies: no grouping, no comparison — analyze and push each independently.
@@ -677,25 +679,25 @@ public class AnalyzeSegmentsTask : IScheduledTask
         _logger.LogInformation("Force-push complete: {Pushed} items pushed", pushed);
     }
 
-    private List<Guid> GetSeasonIds()
+    private IReadOnlyList<BaseItem> GetSeriesList()
     {
         var query = new InternalItemsQuery
         {
-            IncludeItemTypes = [BaseItemKind.Season],
+            IncludeItemTypes = [BaseItemKind.Series],
             IsVirtualItem = false,
             DtoOptions = new DtoOptions(true),
             SourceTypes = [SourceType.Library],
             Recursive = true
         };
 
-        return _libraryManager.GetItemList(query).Select(i => i.Id).Distinct().ToList();
+        return _libraryManager.GetItemList(query);
     }
 
-    private IReadOnlyList<BaseItem> GetEpisodesInSeason(Guid seasonId)
+    private IReadOnlyList<BaseItem> GetEpisodesInSeries(Guid seriesId)
     {
         var query = new InternalItemsQuery
         {
-            ParentId = seasonId,
+            ParentId = seriesId,
             IncludeItemTypes = [BaseItemKind.Episode],
             MediaTypes = [MediaType.Video],
             IsVirtualItem = false,
@@ -705,6 +707,50 @@ public class AnalyzeSegmentsTask : IScheduledTask
         };
 
         return _libraryManager.GetItemList(query);
+    }
+
+    private int GetEpisodeCount()
+    {
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = [BaseItemKind.Episode],
+            MediaTypes = [MediaType.Video],
+            IsVirtualItem = false,
+            DtoOptions = new DtoOptions(true),
+            SourceTypes = [SourceType.Library],
+            Recursive = true
+        };
+
+        return _libraryManager.GetCount(query);
+    }
+
+    private static Dictionary<Guid, IReadOnlyList<BaseItem>> GroupEpisodesBySeason(IReadOnlyList<BaseItem> episodes)
+    {
+        var grouped = new Dictionary<Guid, List<BaseItem>>();
+        foreach (var ep in episodes)
+        {
+            var groupId = ChromaprintProvider.GetGroupId(ep);
+            if (groupId == Guid.Empty)
+            {
+                continue;
+            }
+
+            if (!grouped.TryGetValue(groupId, out var list))
+            {
+                list = [];
+                grouped[groupId] = list;
+            }
+
+            list.Add(ep);
+        }
+
+        var result = new Dictionary<Guid, IReadOnlyList<BaseItem>>(grouped.Count);
+        foreach (var (sid, eps) in grouped)
+        {
+            result[sid] = eps;
+        }
+
+        return result;
     }
 
     private IReadOnlyList<BaseItem> GetMovieList()
