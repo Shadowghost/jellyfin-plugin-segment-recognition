@@ -17,6 +17,7 @@ public sealed class ChapterNameCleanupTests
     [InlineData("chromaprint-preview")]
     [InlineData("blackframe-preview")]
     [InlineData("edl-import")]
+    [InlineData("intro-skipper import")]
     public void ForeignSentinels_ContainsAllSiblingSources(string sentinel)
     {
         Assert.Contains(sentinel, ChapterNameProvider.ForeignSentinels);
@@ -39,7 +40,7 @@ public sealed class ChapterNameCleanupTests
     public void ForeignSentinels_HasExpectedCount()
     {
         // Bump this when a new sentinel is introduced; the test flags forgotten updates.
-        Assert.Equal(5, ChapterNameProvider.ForeignSentinels.Length);
+        Assert.Equal(6, ChapterNameProvider.ForeignSentinels.Length);
     }
 
     [Fact]
