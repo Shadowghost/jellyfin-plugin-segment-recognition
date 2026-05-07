@@ -36,9 +36,12 @@ jobs:
       - name: Generate unstable version and changelog
         id: version
         run: |
+          # YYYY.M.D.HHMM (UTC). HHMM ensures multiple pushes in the same day produce
+          # distinct, monotonically-increasing versions so Jellyfin sees them as updates.
           DATE=$(date -u +%Y.%m.%d)
+          TIME=$(date -u +%H%M)
           SHA_SHORT=$(git rev-parse --short=7 HEAD)
-          echo "version=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "version=${DATE}.${TIME}" >> "$GITHUB_OUTPUT"
           echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
           # Generate changelog of commits on unstable that aren't on main
