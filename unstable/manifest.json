@@ -13,8 +13,8 @@
         "changelog": "",
         "targetAbi": "10.12.0.0",
         "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-latest/segment-recognition_2026.5.7.0.zip",
-        "checksum": "8b3ffb0edb5ae84cd63fc3d63e3cd080",
-        "timestamp": "2026-05-07T18:43:03Z"
+        "checksum": "5e04626ee3f23ec77868383a33788ec1",
+        "timestamp": "2026-05-07T19:18:03Z"
       },
       {
         "version": "2026.4.14.0",
