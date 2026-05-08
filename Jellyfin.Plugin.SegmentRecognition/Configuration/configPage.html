@@ -136,6 +136,93 @@
             width: 100%;
             text-align: center;
         }
+        #srConfigRoot .sr-list-editor {
+            margin: 0.5rem 0 0.25rem 0;
+            width: 100%;
+        }
+        #srConfigRoot .sr-list-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            padding: 0.4rem;
+            min-height: 2.4rem;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        #srConfigRoot .sr-list-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.2rem 0.45rem 0.2rem 0.55rem;
+            background: color-mix(in srgb, var(--theme-primary-color, #00a4dc) 20%, transparent);
+            color: inherit;
+            border-radius: 999px;
+            font-size: 0.9rem;
+            line-height: 1.2;
+        }
+        #srConfigRoot .sr-list-chip-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.1rem;
+            height: 1.1rem;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            border: 0;
+            border-radius: 50%;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.75;
+        }
+        #srConfigRoot .sr-list-chip-remove:hover,
+        #srConfigRoot .sr-list-chip-remove:focus-visible {
+            opacity: 1;
+            background: rgba(255, 255, 255, 0.15);
+            outline: none;
+        }
+        #srConfigRoot .sr-list-empty {
+            padding: 0.2rem 0.4rem;
+            font-size: 0.9rem;
+            opacity: 0.55;
+        }
+        #srConfigRoot .sr-list-add-row {
+            display: flex;
+            gap: 0.4rem;
+            margin-top: 0.5rem;
+        }
+        #srConfigRoot .sr-list-add-row input.sr-list-add-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            padding: 0.3rem 0.5rem;
+            background: rgba(255, 255, 255, 0.06);
+            color: inherit;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            font: inherit;
+        }
+        #srConfigRoot .sr-list-add-row input.sr-list-add-input:focus {
+            outline: none;
+            border-color: var(--theme-primary-color, #00a4dc);
+        }
+        #srConfigRoot .sr-list-add-button {
+            flex: 0 0 auto;
+            padding: 0.3rem 0.85rem;
+            background: rgba(255, 255, 255, 0.08);
+            color: inherit;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            font: inherit;
+            cursor: pointer;
+        }
+        #srConfigRoot .sr-list-add-button:hover,
+        #srConfigRoot .sr-list-add-button:focus-visible {
+            background: rgba(255, 255, 255, 0.15);
+            outline: none;
+        }
     </style>
         <div data-role="content">
             <div id="srConfigRoot" data-sr-version="2026-04-15-conditional-tabs">
@@ -357,30 +444,33 @@
                             <section class="sr-panel" data-panel="chapters" role="tabpanel" aria-labelledby="tab-chapters" hidden data-show-when="chkEnableChapterNameProvider">
                                 <div class="sr-panel-header">
                                     <h2>Chapters</h2>
-                                    <p class="sr-panel-hint">Names matched against chapter titles. Matching uses whole-word comparison, so "Intro" matches a chapter named "Intro" but not "Introduction to Characters".</p>
+                                    <p class="sr-panel-hint">
+                                        Names matched against chapter titles. Matching uses whole-word comparison, so "Intro" matches
+                                        a chapter named "Intro" but not "Introduction to Characters".
+                                    </p>
                                 </div>
 
                                 <fieldset class="verticalSection">
                                     <legend>Chapter Name Patterns</legend>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtIntroChapterNames">Intro Chapter Names (comma-separated)</label>
-                                        <input id="txtIntroChapterNames" type="text" is="emby-input" />
+                                        <label class="inputLabel">Intro Chapter Names</label>
+                                        <div class="sr-list-editor" data-list-key="IntroChapterNames" data-add-placeholder="Add an intro chapter name..."></div>
                                     </div>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtOutroChapterNames">Outro Chapter Names (comma-separated)</label>
-                                        <input id="txtOutroChapterNames" type="text" is="emby-input" />
+                                        <label class="inputLabel">Outro Chapter Names</label>
+                                        <div class="sr-list-editor" data-list-key="OutroChapterNames" data-add-placeholder="Add an outro chapter name..."></div>
                                     </div>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtRecapChapterNames">Recap Chapter Names (comma-separated)</label>
-                                        <input id="txtRecapChapterNames" type="text" is="emby-input" />
+                                        <label class="inputLabel">Recap Chapter Names</label>
+                                        <div class="sr-list-editor" data-list-key="RecapChapterNames" data-add-placeholder="Add a recap chapter name..."></div>
                                     </div>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtPreviewChapterNames">Preview Chapter Names (comma-separated)</label>
-                                        <input id="txtPreviewChapterNames" type="text" is="emby-input" />
+                                        <label class="inputLabel">Preview Chapter Names</label>
+                                        <div class="sr-list-editor" data-list-key="PreviewChapterNames" data-add-placeholder="Add a preview chapter name..."></div>
                                     </div>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtCommercialChapterNames">Commercial Chapter Names (comma-separated)</label>
-                                        <input id="txtCommercialChapterNames" type="text" is="emby-input" />
+                                        <label class="inputLabel">Commercial Chapter Names</label>
+                                        <div class="sr-list-editor" data-list-key="CommercialChapterNames" data-add-placeholder="Add a commercial chapter name..."></div>
                                     </div>
                                 </fieldset>
                             </section>
@@ -433,6 +523,113 @@
                 pluginId: "b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e",
                 tabStorageKey: "segmentRecognition.activeTab"
             };
+
+            // In-memory state for the chip-style list editors. Keyed by data-list-key
+            // (which matches the PluginConfiguration property name) so save can read back
+            // the current arrays directly.
+            var srListEditorState = {};
+
+            function srRenderListEditor(container) {
+                var key = container.getAttribute('data-list-key');
+                var placeholder = container.getAttribute('data-add-placeholder') || 'Add...';
+                var values = (srListEditorState[key] || []).slice();
+
+                container.textContent = '';
+                container.classList.add('sr-list-editor');
+
+                var chipBox = document.createElement('div');
+                chipBox.className = 'sr-list-chips';
+
+                if (values.length === 0) {
+                    var empty = document.createElement('span');
+                    empty.className = 'sr-list-empty';
+                    empty.textContent = 'No entries - add one below.';
+                    chipBox.appendChild(empty);
+                } else {
+                    values.forEach(function (value, index) {
+                        var chip = document.createElement('span');
+                        chip.className = 'sr-list-chip';
+
+                        var label = document.createElement('span');
+                        label.textContent = value;
+                        chip.appendChild(label);
+
+                        var remove = document.createElement('button');
+                        remove.type = 'button';
+                        remove.className = 'sr-list-chip-remove';
+                        remove.setAttribute('aria-label', 'Remove ' + value);
+                        remove.textContent = '×';
+                        remove.addEventListener('click', function () {
+                            var current = srListEditorState[key] || [];
+                            current.splice(index, 1);
+                            srListEditorState[key] = current;
+                            srRenderListEditor(container);
+                        });
+                        chip.appendChild(remove);
+
+                        chipBox.appendChild(chip);
+                    });
+                }
+                container.appendChild(chipBox);
+
+                var addRow = document.createElement('div');
+                addRow.className = 'sr-list-add-row';
+
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'sr-list-add-input';
+                input.placeholder = placeholder;
+
+                var addButton = document.createElement('button');
+                addButton.type = 'button';
+                addButton.className = 'sr-list-add-button';
+                addButton.textContent = 'Add';
+
+                function commit() {
+                    var raw = input.value.trim();
+                    if (!raw) {
+                        return;
+                    }
+                    var current = srListEditorState[key] || [];
+                    if (current.indexOf(raw) === -1) {
+                        current.push(raw);
+                        srListEditorState[key] = current;
+                    }
+                    srRenderListEditor(container);
+                    // Re-render replaces the input element; refocus the new one for fast entry.
+                    var newInput = container.querySelector('.sr-list-add-input');
+                    if (newInput) {
+                        newInput.focus();
+                    }
+                }
+
+                input.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commit();
+                    }
+                });
+                addButton.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    commit();
+                });
+
+                addRow.appendChild(input);
+                addRow.appendChild(addButton);
+                container.appendChild(addRow);
+            }
+
+            function srLoadListEditor(key, values) {
+                srListEditorState[key] = (values || []).slice();
+                var container = document.querySelector('#configPage .sr-list-editor[data-list-key="' + key + '"]');
+                if (container) {
+                    srRenderListEditor(container);
+                }
+            }
+
+            function srGetListEditorValues(key) {
+                return (srListEditorState[key] || []).slice();
+            }
 
             function applyConditionalVisibility() {
                 document.querySelectorAll('#configPage [data-show-when]').forEach(function (el) {
@@ -521,11 +718,11 @@
                         document.getElementById('txtSilenceSnapOutward').value = config.SilenceSnapOutwardSeconds;
                         document.getElementById('chkEnableKeyframeSnapping').checked = config.EnableKeyframeSnapping;
                         document.getElementById('txtKeyframeSnapWindow').value = config.KeyframeSnapWindowSeconds;
-                        document.getElementById('txtIntroChapterNames').value = (config.IntroChapterNames || []).join(', ');
-                        document.getElementById('txtOutroChapterNames').value = (config.OutroChapterNames || []).join(', ');
-                        document.getElementById('txtRecapChapterNames').value = (config.RecapChapterNames || []).join(', ');
-                        document.getElementById('txtPreviewChapterNames').value = (config.PreviewChapterNames || []).join(', ');
-                        document.getElementById('txtCommercialChapterNames').value = (config.CommercialChapterNames || []).join(', ');
+                        srLoadListEditor('IntroChapterNames', config.IntroChapterNames);
+                        srLoadListEditor('OutroChapterNames', config.OutroChapterNames);
+                        srLoadListEditor('RecapChapterNames', config.RecapChapterNames);
+                        srLoadListEditor('PreviewChapterNames', config.PreviewChapterNames);
+                        srLoadListEditor('CommercialChapterNames', config.CommercialChapterNames);
                         document.getElementById('txtChromaprintAnalysisDuration').value = config.ChromaprintAnalysisDurationSeconds;
                         applyConditionalVisibility();
                         Dashboard.hideLoadingMsg();
@@ -542,10 +739,6 @@
                     el.addEventListener('change', applyConditionalVisibility);
                 }
             });
-
-            function parseCommaSeparated(value) {
-                return value.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
-            }
 
             document.getElementById('srSaveButton')
                 .addEventListener('click', function (e) {
@@ -581,11 +774,11 @@
                         config.SilenceSnapOutwardSeconds = parseFloat(document.getElementById('txtSilenceSnapOutward').value);
                         config.EnableKeyframeSnapping = document.getElementById('chkEnableKeyframeSnapping').checked;
                         config.KeyframeSnapWindowSeconds = parseFloat(document.getElementById('txtKeyframeSnapWindow').value);
-                        config.IntroChapterNames = parseCommaSeparated(document.getElementById('txtIntroChapterNames').value);
-                        config.OutroChapterNames = parseCommaSeparated(document.getElementById('txtOutroChapterNames').value);
-                        config.RecapChapterNames = parseCommaSeparated(document.getElementById('txtRecapChapterNames').value);
-                        config.PreviewChapterNames = parseCommaSeparated(document.getElementById('txtPreviewChapterNames').value);
-                        config.CommercialChapterNames = parseCommaSeparated(document.getElementById('txtCommercialChapterNames').value);
+                        config.IntroChapterNames = srGetListEditorValues('IntroChapterNames');
+                        config.OutroChapterNames = srGetListEditorValues('OutroChapterNames');
+                        config.RecapChapterNames = srGetListEditorValues('RecapChapterNames');
+                        config.PreviewChapterNames = srGetListEditorValues('PreviewChapterNames');
+                        config.CommercialChapterNames = srGetListEditorValues('CommercialChapterNames');
                         config.ChromaprintAnalysisDurationSeconds = parseInt(document.getElementById('txtChromaprintAnalysisDuration').value, 10);
                         ApiClient.updatePluginConfiguration(SegmentRecognitionPluginConfig.pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
                     });

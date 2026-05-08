@@ -60,7 +60,8 @@ public class PluginConfiguration : BasePluginConfiguration
         "Ouverture",
         "Vorspann",
         "\u30AA\u30FC\u30D7\u30CB\u30F3\u30B0",
-        "\u7247\u5934"
+        "\u7247\u5934",
+        "Intermission/Intro Animation"
     ];
 
     /// <summary>
@@ -77,7 +78,8 @@ public class PluginConfiguration : BasePluginConfiguration
         "G\u00e9n\u00e9rique",
         "Abspann",
         "\u30A8\u30F3\u30C7\u30A3\u30F3\u30B0",
-        "\u7247\u5C3E"
+        "\u7247\u5C3E",
+        "Endcards/Credits"
     ];
 
     /// <summary>
@@ -90,7 +92,8 @@ public class PluginConfiguration : BasePluginConfiguration
         "Resumen",
         "R\u00e9sum\u00e9",
         "Zusammenfassung",
-        "\u524D\u56DE"
+        "\u524D\u56DE",
+        "Preview/Recap"
     ];
 
     /// <summary>
@@ -127,7 +130,10 @@ public class PluginConfiguration : BasePluginConfiguration
         "Publicit\u00E9",
         "Pubblicit\u00E0",
         "CM",
-        "\u5E83\u544A"
+        "\u5E83\u544A",
+        "Sponsor",
+        "selfpromo",
+        "Unpaid/Self Promotion"
     ];
 
 #pragma warning restore CA1819
