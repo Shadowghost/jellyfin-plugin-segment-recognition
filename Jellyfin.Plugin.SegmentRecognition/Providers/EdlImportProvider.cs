@@ -34,6 +34,12 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
     /// </summary>
     internal const string MatchedName = "edl-import";
 
+    /// <summary>
+    /// Hard upper bound on the number of segments accepted from a single EDL file.
+    /// Prevents memory/CPU exhaustion if a crafted sidecar contains millions of lines.
+    /// </summary>
+    internal const int MaxEdlSegments = 10_000;
+
     private static readonly Dictionary<string, MediaSegmentType> _typeNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Intro"] = MediaSegmentType.Intro,
@@ -183,12 +189,22 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
     {
         var typed = new List<MediaSegmentDto>();
         var untyped = new List<(double StartSeconds, double EndSeconds)>();
+        var acceptedRows = 0;
 
         foreach (var trimmed in File.ReadLines(edlPath).Select(line => line.Trim()))
         {
             if (trimmed.Length == 0 || trimmed[0] == '#')
             {
                 continue;
+            }
+
+            if (acceptedRows >= MaxEdlSegments)
+            {
+                _logger.LogWarning(
+                    "EDL file {Path} exceeds the {Cap}-segment cap; remaining lines ignored",
+                    edlPath,
+                    MaxEdlSegments);
+                break;
             }
 
             // Split on tabs or spaces - some EDL generators use spaces.
@@ -210,6 +226,8 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
             {
                 continue;
             }
+
+            acceptedRows++;
 
             // Action 3 = commercial break (always mapped directly).
             if (action == 3)

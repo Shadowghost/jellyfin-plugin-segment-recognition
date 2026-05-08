@@ -45,6 +45,14 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
 
     private static readonly TimeSpan _regexTimeout = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Hard upper bound on chapter-name length before regex matching. Real chapter titles
+    /// are well under this; rejecting longer strings up front prevents pathological inputs
+    /// from allocating large state inside the regex engine even when the per-call timeout
+    /// would eventually fire.
+    /// </summary>
+    internal const int MaxChapterNameLength = 512;
+
     private readonly IChapterManager _chapterManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IDbContextFactory<SegmentDbContext> _dbContextFactory;
@@ -284,6 +292,13 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
 
     internal static MediaSegmentType? MatchChapterName(Dictionary<MediaSegmentType, Regex[]> regexes, string chapterName)
     {
+        // Defence in depth: a per-regex timeout already exists, but rejecting absurdly long
+        // chapter titles before allocating regex state caps memory cost of crafted inputs.
+        if (chapterName.Length > MaxChapterNameLength)
+        {
+            return null;
+        }
+
         foreach (var (type, typeRegexes) in regexes)
         {
             foreach (var regex in typeRegexes)

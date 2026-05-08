@@ -73,16 +73,17 @@ public partial class FfmpegBlackFrameService
             0,
             (hwArgs, filterPrefix) =>
             {
-                var a = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{0}-ss {1} -t {2} -i \"{3}\" -vf \"{4}cropdetect=round=2\" -an -sn -dn -f null -",
-                    hwArgs,
-                    sampleStart,
-                    sampleDuration,
-                    filePath,
-                    filterPrefix);
-                _logger.LogDebug("Running ffmpeg cropdetect: {Args}", a);
-                return a;
+                var args = new List<string>(hwArgs)
+                {
+                    "-ss", sampleStart.ToString(CultureInfo.InvariantCulture),
+                    "-t", sampleDuration.ToString(CultureInfo.InvariantCulture),
+                    "-i", filePath,
+                    "-vf", filterPrefix + "cropdetect=round=2",
+                    "-an", "-sn", "-dn",
+                    "-f", "null", "-",
+                };
+                _logger.LogDebug("Running ffmpeg cropdetect: {Args}", string.Join(' ', args));
+                return args;
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -202,16 +203,17 @@ public partial class FfmpegBlackFrameService
                     "blackframe=threshold={0}",
                     threshold);
 
-                var a = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{0}-ss {1} -t {2} -i \"{3}\" -vf \"{4}\" -an -sn -dn -f null -",
-                    hwArgs,
-                    startSeconds,
-                    durationSeconds,
-                    filePath,
-                    filterChain);
-                _logger.LogDebug("Running ffmpeg black frame detection: {Args}", a);
-                return a;
+                var args = new List<string>(hwArgs)
+                {
+                    "-ss", startSeconds.ToString(CultureInfo.InvariantCulture),
+                    "-t", durationSeconds.ToString(CultureInfo.InvariantCulture),
+                    "-i", filePath,
+                    "-vf", filterChain.ToString(),
+                    "-an", "-sn", "-dn",
+                    "-f", "null", "-",
+                };
+                _logger.LogDebug("Running ffmpeg black frame detection: {Args}", string.Join(' ', args));
+                return args;
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -242,21 +244,21 @@ public partial class FfmpegBlackFrameService
     /// <summary>
     /// Builds hwaccel input arguments and corresponding filter prefix based on Jellyfin's encoding configuration.
     /// Uses proper <c>-init_hw_device</c> initialization matching Jellyfin's transcoding pipeline for reliable
-    /// device selection. Returns empty strings if no hardware acceleration is available.
+    /// device selection. Returns an empty arg list and prefix if no hardware acceleration is available.
     /// </summary>
     /// <param name="videoCodec">The video codec of the input file (e.g. "h264", "hevc").</param>
     /// <param name="scaleHeight">Optional target height for GPU-side scaling. When set and the source is taller,
     /// frames are scaled on the GPU before hwdownload, significantly reducing CPU work for downstream filters.
     /// Pass 0 to disable scaling (e.g. for cropdetect which needs full resolution).</param>
     /// <returns>A tuple of (hwaccel args to prepend before input, filter prefix to prepend before video filters).</returns>
-    private (string HwArgs, string FilterPrefix) GetHwAccelArgs(string? videoCodec, int scaleHeight = 0)
+    private (IReadOnlyList<string> HwArgs, string FilterPrefix) GetHwAccelArgs(string? videoCodec, int scaleHeight = 0)
     {
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var hwType = encodingOptions.HardwareAccelerationType;
 
         if (hwType == HardwareAccelerationType.none)
         {
-            return (string.Empty, GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
         }
 
         // Respect the user's configured hardware decoding codec list
@@ -269,7 +271,7 @@ public partial class FfmpegBlackFrameService
             _logger.LogDebug(
                 "Video codec {Codec} is not in the hardware decoding codec list, falling back to software decoding",
                 videoCodec);
-            return (string.Empty, GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
         }
 
         // Map hw type to ffmpeg hwaccel name for SupportsHwaccel check
@@ -285,7 +287,7 @@ public partial class FfmpegBlackFrameService
         if (hwaccelName is null || !_mediaEncoder.SupportsHwaccel(hwaccelName))
         {
             _logger.LogDebug("Hardware acceleration {HwType} is not supported by ffmpeg, falling back to software decoding", hwType);
-            return (string.Empty, GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
         }
 
         var vaapiDevice = encodingOptions.VaapiDevice;
@@ -297,30 +299,52 @@ public partial class FfmpegBlackFrameService
         // Build device init + hwaccel args following Jellyfin's transcoding pipeline patterns.
         // Proper -init_hw_device ensures reliable device selection on multi-GPU systems.
         // -filter_hw_device tells GPU-side scale filters which device context to use.
-        var hwArgs = hwType switch
+        IReadOnlyList<string> hwArgs = hwType switch
         {
             // QSV on Linux: derive from VAAPI for reliable device init
             // QSV on Windows: would derive from D3D11VA, but we use simple init as fallback
             HardwareAccelerationType.qsv => OperatingSystem.IsLinux()
-                ? string.Format(
-                    CultureInfo.InvariantCulture,
-                    "-init_hw_device vaapi=va:{0} -init_hw_device qsv=qs@va -filter_hw_device qs -hwaccel qsv -hwaccel_output_format qsv ",
-                    vaapiDevice)
-                : "-init_hw_device qsv=qs -filter_hw_device qs -hwaccel qsv -hwaccel_output_format qsv ",
+                ? new[]
+                {
+                    "-init_hw_device", "vaapi=va:" + vaapiDevice,
+                    "-init_hw_device", "qsv=qs@va",
+                    "-filter_hw_device", "qs",
+                    "-hwaccel", "qsv",
+                    "-hwaccel_output_format", "qsv",
+                }
+                : new[]
+                {
+                    "-init_hw_device", "qsv=qs",
+                    "-filter_hw_device", "qs",
+                    "-hwaccel", "qsv",
+                    "-hwaccel_output_format", "qsv",
+                },
 
-            HardwareAccelerationType.vaapi => string.Format(
-                CultureInfo.InvariantCulture,
-                "-init_hw_device vaapi=va:{0} -filter_hw_device va -hwaccel vaapi -hwaccel_output_format vaapi ",
-                vaapiDevice),
+            HardwareAccelerationType.vaapi => new[]
+            {
+                "-init_hw_device", "vaapi=va:" + vaapiDevice,
+                "-filter_hw_device", "va",
+                "-hwaccel", "vaapi",
+                "-hwaccel_output_format", "vaapi",
+            },
 
-            HardwareAccelerationType.nvenc =>
-                "-init_hw_device cuda=cu:0 -filter_hw_device cu -hwaccel cuda -hwaccel_output_format cuda ",
+            HardwareAccelerationType.nvenc => new[]
+            {
+                "-init_hw_device", "cuda=cu:0",
+                "-filter_hw_device", "cu",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+            },
 
             // VideoToolbox does not require -filter_hw_device
-            HardwareAccelerationType.videotoolbox =>
-                "-init_hw_device videotoolbox=vt -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld ",
+            HardwareAccelerationType.videotoolbox => new[]
+            {
+                "-init_hw_device", "videotoolbox=vt",
+                "-hwaccel", "videotoolbox",
+                "-hwaccel_output_format", "videotoolbox_vld",
+            },
 
-            _ => string.Empty
+            _ => []
         };
 
         // Build the filter prefix: GPU-side scale (optional) → hwdownload → format.
@@ -379,14 +403,14 @@ public partial class FfmpegBlackFrameService
     /// </summary>
     /// <param name="videoCodec">The video codec name for hardware acceleration eligibility.</param>
     /// <param name="scaleHeight">Optional GPU-side scale height (0 to disable). Passed to <see cref="GetHwAccelArgs"/>.</param>
-    /// <param name="buildArgs">A function that takes (hwArgs, filterPrefix) and returns the full ffmpeg argument string.</param>
+    /// <param name="buildArgs">A function that takes (hwArgs, filterPrefix) and returns the full ffmpeg argument list.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The stderr output from the successful ffmpeg run.</returns>
     /// <exception cref="InvalidOperationException">Thrown when ffmpeg fails after all retry attempts.</exception>
     private async Task<string> RunFfmpegWithHwFallbackAsync(
         string? videoCodec,
         int scaleHeight,
-        Func<string, string, string> buildArgs,
+        Func<IReadOnlyList<string>, string, IReadOnlyList<string>> buildArgs,
         CancellationToken cancellationToken)
     {
         var (hwArgs, filterPrefix) = GetHwAccelArgs(videoCodec, scaleHeight);
@@ -394,33 +418,38 @@ public partial class FfmpegBlackFrameService
 
         var (stderr, exitCode) = await RunFfmpegAsync(args, cancellationToken).ConfigureAwait(false);
 
-        if (exitCode != 0 && hwArgs.Length > 0)
+        if (exitCode != 0 && hwArgs.Count > 0)
         {
             _logger.LogWarning("Hardware-accelerated ffmpeg failed (exit code {ExitCode}), retrying with software decoding", exitCode);
-            args = buildArgs(string.Empty, GetSoftwareFilterPrefix(scaleHeight));
+            args = buildArgs([], GetSoftwareFilterPrefix(scaleHeight));
             (stderr, exitCode) = await RunFfmpegAsync(args, cancellationToken).ConfigureAwait(false);
         }
 
         if (exitCode != 0)
         {
             throw new InvalidOperationException(
-                $"ffmpeg failed with exit code {exitCode}: {args}");
+                $"ffmpeg failed with exit code {exitCode}: {string.Join(' ', args)}");
         }
 
         return stderr;
     }
 
-    private async Task<(string Stderr, int ExitCode)> RunFfmpegAsync(string args, CancellationToken cancellationToken)
+    private async Task<(string Stderr, int ExitCode)> RunFfmpegAsync(IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
             FileName = _mediaEncoder.EncoderPath,
-            Arguments = "-nostdin -hide_banner " + args,
             UseShellExecute = false,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        process.StartInfo.ArgumentList.Add("-nostdin");
+        process.StartInfo.ArgumentList.Add("-hide_banner");
+        foreach (var a in args)
+        {
+            process.StartInfo.ArgumentList.Add(a);
+        }
 
         process.Start();
 
@@ -440,7 +469,7 @@ public partial class FfmpegBlackFrameService
 
             if (process.ExitCode != 0)
             {
-                _logger.LogWarning("ffmpeg exited with code {ExitCode}: {Args}", process.ExitCode, args);
+                _logger.LogWarning("ffmpeg exited with code {ExitCode}: {Args}", process.ExitCode, string.Join(' ', args));
             }
 
             return (stderr, process.ExitCode);
@@ -494,16 +523,23 @@ public partial class FfmpegBlackFrameService
         double minDurationSeconds,
         CancellationToken cancellationToken)
     {
-        var args = string.Format(
+        var filter = string.Format(
             CultureInfo.InvariantCulture,
-            "-ss {0} -t {1} -i \"{2}\" -af \"silencedetect=noise={3}dB:d={4}\" -vn -sn -dn -f null -",
-            startSeconds,
-            durationSeconds,
-            filePath,
+            "silencedetect=noise={0}dB:d={1}",
             noisedB,
             minDurationSeconds);
 
-        _logger.LogDebug("Running ffmpeg silencedetect: {Args}", args);
+        var args = new List<string>
+        {
+            "-ss", startSeconds.ToString(CultureInfo.InvariantCulture),
+            "-t", durationSeconds.ToString(CultureInfo.InvariantCulture),
+            "-i", filePath,
+            "-af", filter,
+            "-vn", "-sn", "-dn",
+            "-f", "null", "-",
+        };
+
+        _logger.LogDebug("Running ffmpeg silencedetect: {Args}", string.Join(' ', args));
 
         var (stderr, _) = await RunFfmpegAsync(args, cancellationToken).ConfigureAwait(false);
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -46,30 +47,44 @@ public class FfmpegChromaprintService
         double durationSeconds,
         CancellationToken cancellationToken)
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = Path.Combine(
+            Path.GetTempPath(),
+            "jellyfin-segrec-" + Guid.NewGuid().ToString("N") + ".chromaprint");
+
         try
         {
-            var args = string.Format(
-                CultureInfo.InvariantCulture,
-                "-y -ss {0} -i \"{1}\" -ac 1 -ar {2} -t {3} -vn -sn -dn -f chromaprint -fp_format raw \"{4}\"",
-                startSeconds,
-                filePath,
-                sampleRate,
-                durationSeconds,
-                tempFile);
+            var args = new List<string>
+            {
+                "-nostdin",
+                "-hide_banner",
+                "-y",
+                "-ss", startSeconds.ToString(CultureInfo.InvariantCulture),
+                "-i", filePath,
+                "-ac", "1",
+                "-ar", sampleRate.ToString(CultureInfo.InvariantCulture),
+                "-t", durationSeconds.ToString(CultureInfo.InvariantCulture),
+                "-vn", "-sn", "-dn",
+                "-f", "chromaprint",
+                "-fp_format", "raw",
+                tempFile,
+            };
 
-            _logger.LogDebug("Running ffmpeg chromaprint: {Args}", args);
+            _logger.LogDebug("Running ffmpeg chromaprint: {Args}", string.Join(' ', args));
 
             using var process = new Process();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = _mediaEncoder.EncoderPath,
-                Arguments = "-nostdin -hide_banner " + args,
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true
             };
+
+            foreach (var a in args)
+            {
+                process.StartInfo.ArgumentList.Add(a);
+            }
 
             process.Start();
 
@@ -168,21 +183,29 @@ public class FfmpegChromaprintService
 
         // Query both stream-level duration (MP4/MOV/AVI) and stream tags (MKV DURATION tag)
         // in a single call. One or both may return "N/A" depending on the container format.
-        var args = string.Format(
-            CultureInfo.InvariantCulture,
-            "-v error -select_streams a:0 -show_entries stream=duration:stream_tags=DURATION -of csv=p=0 \"{0}\"",
-            filePath);
+        var args = new List<string>
+        {
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=duration:stream_tags=DURATION",
+            "-of", "csv=p=0",
+            filePath,
+        };
 
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
             FileName = probePath,
-            Arguments = args,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+
+        foreach (var a in args)
+        {
+            process.StartInfo.ArgumentList.Add(a);
+        }
 
         process.Start();
 
