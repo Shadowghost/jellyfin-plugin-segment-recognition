@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using BitFaster.Caching.Lru;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -15,8 +16,19 @@ namespace Jellyfin.Plugin.SegmentRecognition.Services;
 /// </summary>
 public class SegmentRefiner
 {
+    /// <summary>
+    /// Capacity of the in-process silence-interval cache.
+    /// </summary>
+    private const int SilenceCacheCapacity = 1024;
+
     private readonly FfmpegBlackFrameService _blackFrameService;
     private readonly ILogger<SegmentRefiner> _logger;
+
+    /// <summary>
+    /// LRU cache of silence-detect results keyed by every parameter that affects output.
+    /// </summary>
+    private readonly FastConcurrentLru<SilenceCacheKey, IReadOnlyList<(double Start, double End)>> _silenceCache
+        = new(SilenceCacheCapacity);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SegmentRefiner"/> class.
@@ -61,13 +73,16 @@ public class SegmentRefiner
         var noisedB = config.SilenceDetectNoisedB;
         var minDuration = config.SilenceDetectMinDurationSeconds;
 
-        // For start boundary: outward = before (earlier), inward = after (later, toward segment center)
-        var refinedStart = await SnapBoundaryAsync(
-            startTicks, filePath, outwardSeconds, inwardSeconds, noisedB, minDuration, cancellationToken).ConfigureAwait(false);
+        // Kick off both boundary snaps concurrently. Each does at most one ffmpeg silencedetect invocation.
+        var startTask = SnapBoundaryAsync(
+            startTicks, filePath, outwardSeconds, inwardSeconds, noisedB, minDuration, cancellationToken);
+        var endTask = SnapBoundaryAsync(
+            endTicks, filePath, inwardSeconds, outwardSeconds, noisedB, minDuration, cancellationToken);
 
-        // For end boundary: inward = before (earlier, toward segment center), outward = after (later)
-        var refinedEnd = await SnapBoundaryAsync(
-            endTicks, filePath, inwardSeconds, outwardSeconds, noisedB, minDuration, cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(startTask, endTask).ConfigureAwait(false);
+
+        var refinedStart = await startTask.ConfigureAwait(false);
+        var refinedEnd = await endTask.ConfigureAwait(false);
 
         // Ensure start < end after refinement
         if (refinedStart >= refinedEnd)
@@ -105,10 +120,10 @@ public class SegmentRefiner
         var scanStart = Math.Max(0, targetSeconds - beforeSeconds);
         var scanDuration = beforeSeconds + afterSeconds;
 
-        List<(double StartSeconds, double EndSeconds)> silenceIntervals;
+        IReadOnlyList<(double Start, double End)> silenceIntervals;
         try
         {
-            silenceIntervals = await _blackFrameService.DetectSilenceAsync(
+            silenceIntervals = await GetOrDetectSilenceAsync(
                 filePath, scanStart, scanDuration, noisedB, minDuration, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -147,4 +162,38 @@ public class SegmentRefiner
 
         return (long)(bestMidpoint * TimeSpan.TicksPerSecond);
     }
+
+    private async Task<IReadOnlyList<(double Start, double End)>> GetOrDetectSilenceAsync(
+        string filePath,
+        double scanStart,
+        double scanDuration,
+        int noisedB,
+        double minDuration,
+        CancellationToken cancellationToken)
+    {
+        var key = new SilenceCacheKey(
+            filePath,
+            (long)(scanStart * TimeSpan.TicksPerSecond),
+            (long)(scanDuration * TimeSpan.TicksPerSecond),
+            noisedB,
+            (long)(minDuration * TimeSpan.TicksPerSecond));
+
+        if (_silenceCache.TryGet(key, out var cached))
+        {
+            return cached;
+        }
+
+        var detected = await _blackFrameService.DetectSilenceAsync(
+            filePath, scanStart, scanDuration, noisedB, minDuration, cancellationToken).ConfigureAwait(false);
+
+        _silenceCache.AddOrUpdate(key, detected);
+        return detected;
+    }
+
+    private readonly record struct SilenceCacheKey(
+        string FilePath,
+        long ScanStartTicks,
+        long ScanDurationTicks,
+        int NoiseDb,
+        long MinDurationTicks);
 }
