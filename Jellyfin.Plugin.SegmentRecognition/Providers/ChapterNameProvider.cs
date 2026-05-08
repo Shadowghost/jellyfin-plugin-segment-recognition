@@ -51,9 +51,12 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
     private readonly ILogger<ChapterNameProvider> _logger;
 
     /// <summary>
-    /// Pre-compiled regexes per segment type, rebuilt when the plugin configuration changes.
+    /// Pre-compiled regexes per segment type. Each segment type holds an array of
+    /// regexes - one per configured chapter-name pattern - and a chapter is matched
+    /// against a type if any of that type's regexes hits. Rebuilt when the plugin
+    /// configuration changes.
     /// </summary>
-    private volatile Dictionary<MediaSegmentType, Regex> _regexes;
+    private volatile Dictionary<MediaSegmentType, Regex[]> _regexes;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChapterNameProvider"/> class.
@@ -288,20 +291,23 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         };
     }
 
-    private static MediaSegmentType? MatchChapterName(Dictionary<MediaSegmentType, Regex> regexes, string chapterName)
+    internal static MediaSegmentType? MatchChapterName(Dictionary<MediaSegmentType, Regex[]> regexes, string chapterName)
     {
-        foreach (var (type, regex) in regexes)
+        foreach (var (type, typeRegexes) in regexes)
         {
-            try
+            foreach (var regex in typeRegexes)
             {
-                if (regex.IsMatch(chapterName))
+                try
                 {
-                    return type;
+                    if (regex.IsMatch(chapterName))
+                    {
+                        return type;
+                    }
                 }
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                // Malformed or adversarial chapter name - skip this type
+                catch (RegexMatchTimeoutException)
+                {
+                    // Malformed or adversarial chapter name - skip this regex
+                }
             }
         }
 
@@ -319,32 +325,39 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
     }
 
     /// <summary>
-    /// Builds compiled regexes for all segment types. Each regex combines all patterns
-    /// for a segment type into a single alternation:
-    /// <c>(^|\s)(Pattern1|Pattern2|...)(?!\s+End)(\s|:|$)</c>.
+    /// Builds compiled regexes for all segment types. Each pattern in a type's
+    /// chapter-name list compiles to its own regex (wrapped in a word-boundary check
+    /// so "Intro" matches "Intro" and "Intro:" but not "Introvert"). Multiple regexes
+    /// per segment type are supported - a chapter matches a type if any of its
+    /// regexes hits.
     /// </summary>
     /// <param name="config">The plugin configuration containing chapter name patterns.</param>
-    /// <returns>A dictionary mapping segment types to their compiled regexes.</returns>
-    internal static Dictionary<MediaSegmentType, Regex> BuildRegexes(PluginConfiguration config)
+    /// <returns>A dictionary mapping segment types to their compiled regex arrays.</returns>
+    internal static Dictionary<MediaSegmentType, Regex[]> BuildRegexes(PluginConfiguration config)
     {
-        var regexes = new Dictionary<MediaSegmentType, Regex>();
-        AddRegex(regexes, MediaSegmentType.Intro, config.IntroChapterNames);
-        AddRegex(regexes, MediaSegmentType.Outro, config.OutroChapterNames);
-        AddRegex(regexes, MediaSegmentType.Recap, config.RecapChapterNames);
-        AddRegex(regexes, MediaSegmentType.Preview, config.PreviewChapterNames);
-        AddRegex(regexes, MediaSegmentType.Commercial, config.CommercialChapterNames);
+        var regexes = new Dictionary<MediaSegmentType, Regex[]>();
+        AddRegexes(regexes, MediaSegmentType.Intro, config.IntroChapterNames);
+        AddRegexes(regexes, MediaSegmentType.Outro, config.OutroChapterNames);
+        AddRegexes(regexes, MediaSegmentType.Recap, config.RecapChapterNames);
+        AddRegexes(regexes, MediaSegmentType.Preview, config.PreviewChapterNames);
+        AddRegexes(regexes, MediaSegmentType.Commercial, config.CommercialChapterNames);
         return regexes;
     }
 
-    private static void AddRegex(Dictionary<MediaSegmentType, Regex> regexes, MediaSegmentType type, string[] patterns)
+    private static void AddRegexes(Dictionary<MediaSegmentType, Regex[]> regexes, MediaSegmentType type, string[] patterns)
     {
         if (patterns.Length == 0)
         {
             return;
         }
 
-        var alternation = string.Join("|", patterns.Select(Regex.Escape));
-        var pattern = @"(^|\s)(" + alternation + @")(?!\s+End)(\s|:|$)";
-        regexes[type] = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled, _regexTimeout);
+        var compiled = new Regex[patterns.Length];
+        for (var i = 0; i < patterns.Length; i++)
+        {
+            var pattern = @"(^|\s)(" + Regex.Escape(patterns[i]) + @")(?!\s+End)(\s|:|$)";
+            compiled[i] = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled, _regexTimeout);
+        }
+
+        regexes[type] = compiled;
     }
 }

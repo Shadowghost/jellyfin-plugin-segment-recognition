@@ -1,3 +1,4 @@
+using System.Linq;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
@@ -8,6 +9,9 @@ namespace Jellyfin.Plugin.SegmentRecognition.Tests.Providers;
 
 public class ChapterNameMatchingTests
 {
+    private static bool AnyMatches(System.Text.RegularExpressions.Regex[] regexes, string input)
+        => regexes.Any(r => r.IsMatch(input));
+
     // --- BuildRegexes ---
 
     [Fact]
@@ -22,6 +26,23 @@ public class ChapterNameMatchingTests
         Assert.Contains(MediaSegmentType.Recap, regexes.Keys);
         Assert.Contains(MediaSegmentType.Preview, regexes.Keys);
         Assert.Contains(MediaSegmentType.Commercial, regexes.Keys);
+    }
+
+    [Fact]
+    public void BuildRegexes_OneRegexPerPattern()
+    {
+        var config = new PluginConfiguration
+        {
+            IntroChapterNames = ["Intro", "Opening", "OP"],
+            OutroChapterNames = [],
+            RecapChapterNames = [],
+            PreviewChapterNames = [],
+            CommercialChapterNames = []
+        };
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        Assert.Equal(3, regexes[MediaSegmentType.Intro].Length);
     }
 
     [Fact]
@@ -50,11 +71,11 @@ public class ChapterNameMatchingTests
         var regexes = ChapterNameProvider.BuildRegexes(config);
         var commercial = regexes[MediaSegmentType.Commercial];
 
-        Assert.Matches(commercial, "Commercial");
-        Assert.Matches(commercial, "Ad break");
-        Assert.Matches(commercial, "Werbung");
-        Assert.Matches(commercial, "Publicidad");
-        Assert.DoesNotMatch(commercial, "Opening");
+        Assert.True(AnyMatches(commercial, "Commercial"));
+        Assert.True(AnyMatches(commercial, "Ad break"));
+        Assert.True(AnyMatches(commercial, "Werbung"));
+        Assert.True(AnyMatches(commercial, "Publicidad"));
+        Assert.False(AnyMatches(commercial, "Opening"));
     }
 
     [Fact]
@@ -102,7 +123,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Intro], chapterName);
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], chapterName));
     }
 
     [Theory]
@@ -114,7 +135,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Outro], chapterName);
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Outro], chapterName));
     }
 
     [Theory]
@@ -124,7 +145,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Recap], chapterName);
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Recap], chapterName));
     }
 
     [Theory]
@@ -135,7 +156,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Preview], chapterName);
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Preview], chapterName));
     }
 
     [Theory]
@@ -154,7 +175,7 @@ public class ChapterNameMatchingTests
 
         var regexes = ChapterNameProvider.BuildRegexes(config);
 
-        Assert.DoesNotMatch(regexes[MediaSegmentType.Intro], chapterName);
+        Assert.False(AnyMatches(regexes[MediaSegmentType.Intro], chapterName));
     }
 
     [Fact]
@@ -162,7 +183,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Intro], "Chapter 1: Intro");
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], "Chapter 1: Intro"));
     }
 
     [Fact]
@@ -170,7 +191,7 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.Matches(regexes[MediaSegmentType.Intro], "Intro:");
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], "Intro:"));
     }
 
     [Fact]
@@ -186,9 +207,9 @@ public class ChapterNameMatchingTests
 
         var regexes = ChapterNameProvider.BuildRegexes(config);
 
-        Assert.Matches(regexes[MediaSegmentType.Intro], "Opening (credits)");
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], "Opening (credits)"));
         // Without escaping, "(credits)" would be a regex group, not a literal match
-        Assert.DoesNotMatch(regexes[MediaSegmentType.Intro], "Opening credits");
+        Assert.False(AnyMatches(regexes[MediaSegmentType.Intro], "Opening credits"));
     }
 
     [Fact]
@@ -196,7 +217,43 @@ public class ChapterNameMatchingTests
     {
         var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
 
-        Assert.DoesNotMatch(regexes[MediaSegmentType.Intro], "Intro End");
+        Assert.False(AnyMatches(regexes[MediaSegmentType.Intro], "Intro End"));
+    }
+
+    // --- yt-dlp SponsorBlock chapter recognition (via default chapter-name lists) ---
+
+    [Theory]
+    [InlineData("[SponsorBlock]: Sponsor", MediaSegmentType.Commercial)]
+    [InlineData("[SponsorBlock]: Unpaid/Self Promotion", MediaSegmentType.Commercial)]
+    [InlineData("[SponsorBlock]: selfpromo", MediaSegmentType.Commercial)]
+    [InlineData("[SponsorBlock]: sponsor", MediaSegmentType.Commercial)]
+    [InlineData("[SponsorBlock]: Intermission/Intro Animation", MediaSegmentType.Intro)]
+    [InlineData("[SponsorBlock]: intro", MediaSegmentType.Intro)]
+    [InlineData("[SponsorBlock]: Endcards/Credits", MediaSegmentType.Outro)]
+    [InlineData("[SponsorBlock]: outro", MediaSegmentType.Outro)]
+    [InlineData("[SponsorBlock]: Preview/Recap", MediaSegmentType.Recap)]
+    public void DefaultConfig_RecognizesSponsorBlockChapter(string chapterName, MediaSegmentType expected)
+    {
+        var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
+
+        var matched = ChapterNameProvider.MatchChapterName(regexes, chapterName);
+
+        Assert.Equal(expected, matched);
+    }
+
+    [Theory]
+    // Categories without a clean segment-type analogue should not match anything in the
+    // defaults - users can opt in by adding their own entries.
+    [InlineData("[SponsorBlock]: Filler Tangent")]
+    [InlineData("[SponsorBlock]: filler")]
+    [InlineData("[SponsorBlock]: interaction")]
+    [InlineData("[SponsorBlock]: music_offtopic")]
+    [InlineData("[SponsorBlock]: poi_highlight")]
+    public void DefaultConfig_IgnoresUnmappedSponsorBlockCategories(string chapterName)
+    {
+        var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
+
+        Assert.Null(ChapterNameProvider.MatchChapterName(regexes, chapterName));
     }
 
     // --- IsValidDuration ---
@@ -288,4 +345,5 @@ public class ChapterNameMatchingTests
 
         Assert.Equal(expected, ChapterNameProvider.IsValidDuration(MediaSegmentType.Recap, duration, config, false));
     }
+
 }
