@@ -202,21 +202,28 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         var outroTime = sw.Elapsed;
 
         // Deduplicate frames by TimestampTicks (ffmpeg can report duplicates,
-        // and intro/outro scan regions can overlap for short files)
+        // and intro/outro scan regions can overlap for short files).
         var seenTimestamps = new HashSet<long>();
+        var frameRows = new List<BlackFrameResult>(introFrames.Count + outroFrames.Count);
+        var nowUtc = DateTime.UtcNow;
         foreach (var (timestampTicks, blackPercentage) in introFrames.Concat(outroFrames))
         {
             if (seenTimestamps.Add(timestampTicks))
             {
-                db.BlackFrameResults.Add(new BlackFrameResult
+                frameRows.Add(new BlackFrameResult
                 {
                     ItemId = itemId,
                     TimestampTicks = timestampTicks,
                     BlackPercentage = blackPercentage,
                     ConfigHash = configHash,
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = nowUtc
                 });
             }
+        }
+
+        if (frameRows.Count > 0)
+        {
+            db.BlackFrameResults.AddRange(frameRows);
         }
 
         var outroClusters = ClusterFrames(outroFrames, config.BlackFrameMinDurationMs * TimeSpan.TicksPerMillisecond);
@@ -290,16 +297,29 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        db.BlackFrameResults.RemoveRange(
-            db.BlackFrameResults.Where(r => r.ItemId == itemId));
-        db.CropDetectResults.RemoveRange(
-            db.CropDetectResults.Where(r => r.ItemId == itemId));
-        db.ChapterAnalysisResults.RemoveRange(
-            db.ChapterAnalysisResults.Where(r => r.ItemId == itemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview));
-        db.AnalysisStatuses.RemoveRange(
-            db.AnalysisStatuses.Where(s => s.ItemId == itemId && s.ProviderName == Name));
+        // ExecuteDeleteAsync issues a single SQL DELETE without materializing or tracking
+        // entities; wrapping the four deletes in a transaction keeps the cleanup atomic so
+        // a partial failure can't leave orphaned rows referencing this item.
+        using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await db.BlackFrameResults
+            .Where(r => r.ItemId == itemId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.CropDetectResults
+            .Where(r => r.ItemId == itemId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.ChapterAnalysisResults
+            .Where(r => r.ItemId == itemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.AnalysisStatuses
+            .Where(s => s.ItemId == itemId && s.ProviderName == Name)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<(int Width, int Height, int X, int Y)?> GetOrDetectCropAsync(

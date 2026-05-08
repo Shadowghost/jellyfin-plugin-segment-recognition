@@ -38,7 +38,16 @@ public class ImportIntroSkipperDataTask : IScheduledTask
     /// </summary>
     internal const string MatchedName = "intro-skipper import";
 
+    /// <summary>
+    /// Hard upper bound on the decompressed size of a single intro-skipper fingerprint blob.
+    /// Real fingerprints are well under 1 MiB; anything larger is treated as a malformed
+    /// or hostile cache row and skipped to avoid memory exhaustion via a Brotli bomb.
+    /// </summary>
+    internal const int MaxDecompressedFingerprintBytes = 16 * 1024 * 1024;
+
     private static readonly string[] _allProviderNames = [ProviderNames.ChapterName, ProviderNames.BlackFrame, ProviderNames.Chromaprint];
+
+    private static readonly JsonSerializerOptions _fingerprintJsonOptions = new() { MaxDepth = 4 };
 
     private readonly IApplicationPaths _applicationPaths;
     private readonly IDbContextFactory<SegmentDbContext> _dbContextFactory;
@@ -379,10 +388,24 @@ public class ImportIntroSkipperDataTask : IScheduledTask
     {
         using var input = new MemoryStream(compressed, writable: false);
         using var brotli = new BrotliStream(input, CompressionMode.Decompress);
-        using var output = new MemoryStream();
-        brotli.CopyTo(output);
 
-        var hashes = JsonSerializer.Deserialize<uint[]>(output.GetBuffer().AsSpan(0, (int)output.Length))
+        // Read the decompressed payload through a fixed-size buffer with a hard length cap
+        // so a maliciously crafted blob cannot expand into multi-GB of RAM.
+        using var output = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        int read;
+        while ((read = brotli.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (output.Length + read > MaxDecompressedFingerprintBytes)
+            {
+                throw new InvalidDataException(
+                    $"Decompressed fingerprint blob exceeds {MaxDecompressedFingerprintBytes} bytes");
+            }
+
+            output.Write(buffer, 0, read);
+        }
+
+        var hashes = JsonSerializer.Deserialize<uint[]>(output.GetBuffer().AsSpan(0, (int)output.Length), _fingerprintJsonOptions)
             ?? [];
         if (hashes.Length == 0)
         {

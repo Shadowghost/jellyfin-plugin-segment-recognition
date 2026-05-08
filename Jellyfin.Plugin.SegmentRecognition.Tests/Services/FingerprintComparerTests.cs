@@ -45,8 +45,8 @@ public class FingerprintComparerTests
     [InlineData(true, true)]
     public void EmptyFingerprints_ReturnsEmpty(bool aEmpty, bool bEmpty)
     {
-        var a = aEmpty ? Array.Empty<byte>() : CreateFingerprint(200, seed: 1);
-        var b = bEmpty ? Array.Empty<byte>() : CreateFingerprint(200, seed: 2);
+        var a = aEmpty ? [] : CreateFingerprint(200, seed: 1);
+        var b = bEmpty ? [] : CreateFingerprint(200, seed: 2);
 
         var results = FingerprintComparer.FindMatchedRegions(
             a, b, DefaultMaxBitErrors, DefaultMaxTimeSkipSeconds,

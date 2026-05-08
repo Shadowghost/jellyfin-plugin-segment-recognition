@@ -302,13 +302,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         _logger.LogDebug("Processing season {Label} ({Count} episodes)", seasonLabel, episodes.Count);
 
+        // Pre-compute staleness state for the whole season in a handful of queries instead of
+        // ~6 round-trips per episode. Subsequent in-loop checks become HashSet lookups.
+        var staleness = await LoadStalenessAsync(episodes, config, cancellationToken).ConfigureAwait(false);
+
         // 1) Analyze each episode (chapters + blackframe + chromaprint fingerprint generation).
         var anyNewWork = false;
         foreach (var ep in episodes)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var libraryOptions = _libraryManager.GetLibraryOptions(ep);
-            if (await AnalyzeItemAsync(ep, libraryOptions, config, stats, cancellationToken).ConfigureAwait(false))
+            if (await AnalyzeItemAsync(ep, libraryOptions, config, staleness, stats, cancellationToken).ConfigureAwait(false))
             {
                 anyNewWork = true;
             }
@@ -359,7 +363,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
         CancellationToken cancellationToken)
     {
         var libraryOptions = _libraryManager.GetLibraryOptions(movie);
-        if (await AnalyzeItemAsync(movie, libraryOptions, config, stats, cancellationToken).ConfigureAwait(false))
+        var staleness = await LoadStalenessAsync(new[] { movie }, config, cancellationToken).ConfigureAwait(false);
+        if (await AnalyzeItemAsync(movie, libraryOptions, config, staleness, stats, cancellationToken).ConfigureAwait(false))
         {
             await PushSegmentsAsync(movie, libraryOptions, forceOverwrite, stats, cancellationToken).ConfigureAwait(false);
         }
@@ -430,6 +435,100 @@ public class AnalyzeSegmentsTask : IScheduledTask
         return hasZeroMatchStale;
     }
 
+    private async Task<StalenessSnapshot> LoadStalenessAsync(
+        IReadOnlyCollection<BaseItem> items,
+        PluginConfiguration config,
+        CancellationToken cancellationToken)
+    {
+        var itemIds = items.Select(i => i.Id).Distinct().ToList();
+        if (itemIds.Count == 0)
+        {
+            return new StalenessSnapshot();
+        }
+
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var chapterHash = ConfigHasher.ChapterName(config);
+        var bfHash = ConfigHasher.BlackFrame(config);
+
+        var chapterAnalyzed = new HashSet<Guid>();
+        var blackFrameAnalyzed = new HashSet<Guid>();
+        var chromaprintAnalyzed = new HashSet<Guid>();
+        var staleChapter = new HashSet<Guid>();
+        var staleBlackFrame = new HashSet<Guid>();
+        var withFingerprint = new HashSet<Guid>();
+
+        // Chunk by SQLite's parameter cap so a 1000-episode "season" (or a forced movie batch)
+        // doesn't blow the IN(...) limit when EF expands Contains().
+        foreach (var chunk in itemIds.Chunk(500))
+        {
+            var statuses = await db.AnalysisStatuses
+                .AsNoTracking()
+                .Where(s => chunk.Contains(s.ItemId))
+                .Select(s => new { s.ItemId, s.ProviderName })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var s in statuses)
+            {
+                if (s.ProviderName == ProviderNames.ChapterName)
+                {
+                    chapterAnalyzed.Add(s.ItemId);
+                }
+                else if (s.ProviderName == ProviderNames.BlackFrame)
+                {
+                    blackFrameAnalyzed.Add(s.ItemId);
+                }
+                else if (s.ProviderName == ProviderNames.Chromaprint)
+                {
+                    chromaprintAnalyzed.Add(s.ItemId);
+                }
+            }
+
+            var staleChapterIds = await db.ChapterAnalysisResults
+                .AsNoTracking()
+                .Where(r => chunk.Contains(r.ItemId)
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
+                    && r.MatchedChapterName != EdlImportProvider.MatchedName
+                    && r.MatchedChapterName != ImportIntroSkipperDataTask.MatchedName
+                    && r.ConfigHash != chapterHash)
+                .Select(r => r.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            staleChapter.UnionWith(staleChapterIds);
+
+            var staleBfIds = await db.BlackFrameResults
+                .AsNoTracking()
+                .Where(r => chunk.Contains(r.ItemId) && r.ConfigHash != bfHash)
+                .Select(r => r.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            staleBlackFrame.UnionWith(staleBfIds);
+
+            var fingerprintIds = await db.ChromaprintResults
+                .AsNoTracking()
+                .Where(r => chunk.Contains(r.ItemId))
+                .Select(r => r.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            withFingerprint.UnionWith(fingerprintIds);
+        }
+
+        return new StalenessSnapshot
+        {
+            ChapterAnalyzed = chapterAnalyzed,
+            BlackFrameAnalyzed = blackFrameAnalyzed,
+            ChromaprintAnalyzed = chromaprintAnalyzed,
+            StaleChapterItems = staleChapter,
+            StaleBlackFrameItems = staleBlackFrame,
+            ItemsWithFingerprint = withFingerprint,
+        };
+    }
+
     /// <summary>
     /// Runs all applicable analysis pipelines for a single item.
     /// Returns <c>true</c> if any new analysis work was performed (meaning segments should be pushed).
@@ -438,10 +537,10 @@ public class AnalyzeSegmentsTask : IScheduledTask
         BaseItem item,
         MediaBrowser.Model.Configuration.LibraryOptions libraryOptions,
         PluginConfiguration config,
+        StalenessSnapshot staleness,
         TaskStats stats,
         CancellationToken cancellationToken)
     {
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         var snapshotBefore = stats.TotalWork;
         var disabledProviders = libraryOptions.DisabledMediaSegmentProviders;
 
@@ -453,32 +552,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // Chapter name analysis
         if (config.EnableChapterNameProvider && !IsProviderDisabled(disabledProviders, ProviderNames.ChapterName))
         {
-            var needsChapterAnalysis = !await db.AnalysisStatuses
-                .AnyAsync(s => s.ItemId == item.Id && s.ProviderName == ProviderNames.ChapterName, cancellationToken)
-                .ConfigureAwait(false);
+            var needsChapterAnalysis = !staleness.ChapterAnalyzed.Contains(item.Id);
 
-            if (!needsChapterAnalysis)
+            if (!needsChapterAnalysis && staleness.StaleChapterItems.Contains(item.Id))
             {
-                // Check for stale results from a different config
-                var chapterHash = ConfigHasher.ChapterName(config);
-                var staleChapter = await db.ChapterAnalysisResults
-                    .AnyAsync(
-                        r => r.ItemId == item.Id
-                            && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
-                            && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
-                            && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
-                            && r.MatchedChapterName != EdlImportProvider.MatchedName
-                            && r.MatchedChapterName != ImportIntroSkipperDataTask.MatchedName
-                            && r.ConfigHash != chapterHash,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (staleChapter)
-                {
-                    _logger.LogDebug("Chapter config changed for \"{ItemName}\", re-analyzing", item.Name);
-                    await _chapterNameProvider.CleanupExtractedData(item.Id, cancellationToken).ConfigureAwait(false);
-                    needsChapterAnalysis = true;
-                }
+                _logger.LogDebug("Chapter config changed for \"{ItemName}\", re-analyzing", item.Name);
+                await _chapterNameProvider.CleanupExtractedData(item.Id, cancellationToken).ConfigureAwait(false);
+                needsChapterAnalysis = true;
             }
 
             if (needsChapterAnalysis)
@@ -500,24 +580,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // Black frame analysis
         if (config.EnableBlackFrameProvider && !IsProviderDisabled(disabledProviders, ProviderNames.BlackFrame))
         {
-            var needsBlackFrame = !await db.AnalysisStatuses
-                .AnyAsync(s => s.ItemId == item.Id && s.ProviderName == ProviderNames.BlackFrame, cancellationToken)
-                .ConfigureAwait(false);
+            var needsBlackFrame = !staleness.BlackFrameAnalyzed.Contains(item.Id);
 
-            if (!needsBlackFrame)
+            if (!needsBlackFrame && staleness.StaleBlackFrameItems.Contains(item.Id))
             {
-                // Check for stale results from a different config
-                var bfHash = ConfigHasher.BlackFrame(config);
-                var staleBf = await db.BlackFrameResults
-                    .AnyAsync(r => r.ItemId == item.Id && r.ConfigHash != bfHash, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (staleBf)
-                {
-                    _logger.LogDebug("BlackFrame config changed for \"{ItemName}\", re-analyzing", item.Name);
-                    await _blackFrameProvider.CleanupExtractedData(item.Id, cancellationToken).ConfigureAwait(false);
-                    needsBlackFrame = true;
-                }
+                _logger.LogDebug("BlackFrame config changed for \"{ItemName}\", re-analyzing", item.Name);
+                await _blackFrameProvider.CleanupExtractedData(item.Id, cancellationToken).ConfigureAwait(false);
+                needsBlackFrame = true;
             }
 
             if (needsBlackFrame)
@@ -540,11 +609,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
         if (config.EnableChromaprintProvider && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
             && ChromaprintProvider.GetGroupId(item) != Guid.Empty)
         {
-            await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionIntro, config, stats, cancellationToken).ConfigureAwait(false);
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionIntro, config, staleness, stats, cancellationToken).ConfigureAwait(false);
 
             if (config.EnableCreditsFingerprinting)
             {
-                await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionCredits, config, stats, cancellationToken).ConfigureAwait(false);
+                await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionCredits, config, staleness, stats, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -562,6 +632,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         BaseItem item,
         string region,
         PluginConfiguration config,
+        StalenessSnapshot staleness,
         TaskStats stats,
         CancellationToken cancellationToken)
     {
@@ -574,18 +645,10 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // fingerprint it - there's no signal to compare against and re-analysis would defeat the
         // purpose of the import. Items with at least one fingerprint row fall through to the
         // existing ConfigHash-based regen logic below.
-        var hasAnyFingerprint = await db.ChromaprintResults
-            .AnyAsync(r => r.ItemId == item.Id, cancellationToken)
-            .ConfigureAwait(false);
-        if (!hasAnyFingerprint)
+        if (!staleness.ItemsWithFingerprint.Contains(item.Id)
+            && staleness.ChromaprintAnalyzed.Contains(item.Id))
         {
-            var hasStatus = await db.AnalysisStatuses
-                .AnyAsync(s => s.ItemId == item.Id && s.ProviderName == ProviderNames.Chromaprint, cancellationToken)
-                .ConfigureAwait(false);
-            if (hasStatus)
-            {
-                return;
-            }
+            return;
         }
 
         var existing = await db.ChromaprintResults
@@ -774,5 +837,24 @@ public class AnalyzeSegmentsTask : IScheduledTask
         };
 
         return _libraryManager.GetItemList(query);
+    }
+
+    /// <summary>
+    /// Pre-computed per-item staleness state, loaded once per group of items so that the
+    /// in-loop hot path avoids ~6 EF round-trips per item.
+    /// </summary>
+    private sealed class StalenessSnapshot
+    {
+        public HashSet<Guid> ChapterAnalyzed { get; init; } = [];
+
+        public HashSet<Guid> BlackFrameAnalyzed { get; init; } = [];
+
+        public HashSet<Guid> ChromaprintAnalyzed { get; init; } = [];
+
+        public HashSet<Guid> StaleChapterItems { get; init; } = [];
+
+        public HashSet<Guid> StaleBlackFrameItems { get; init; } = [];
+
+        public HashSet<Guid> ItemsWithFingerprint { get; init; } = [];
     }
 }
