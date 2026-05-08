@@ -93,7 +93,7 @@ public class TaskStatsTests
 
         stats.PushedItemIds.TryAdd(id1, 0);
         stats.PushedItemIds.TryAdd(id2, 0);
-        stats.PushedItemIds.TryAdd(id1, 0); // duplicate — should not add
+        stats.PushedItemIds.TryAdd(id1, 0); // duplicate - should not add
 
         Assert.Equal(2, stats.PushedItemIds.Count);
         Assert.True(stats.PushedItemIds.ContainsKey(id1));

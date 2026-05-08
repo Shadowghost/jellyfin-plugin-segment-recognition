@@ -209,7 +209,7 @@ public sealed class EdlParsingTests : IDisposable
     [Fact]
     public void ZeroRuntime_AllSegmentsClassifiedAsFirstHalf()
     {
-        // Unknown runtime — all segments treated as first-half
+        // Unknown runtime - all segments treated as first-half
         var edlPath = WriteEdl(
             "0.00\t5.00\t0",
             "1200.00\t1350.00\t0");
@@ -217,7 +217,7 @@ public sealed class EdlParsingTests : IDisposable
         var segments = _provider.ParseEdlFile(edlPath, _itemId, runtimeTicks: 0);
 
         Assert.Equal(2, segments.Count);
-        // Both in "first half" — first becomes Recap (2+ segments), second becomes Intro
+        // Both in "first half" - first becomes Recap (2+ segments), second becomes Intro
         Assert.Equal(MediaSegmentType.Recap, segments[0].Type);
         Assert.Equal(MediaSegmentType.Intro, segments[1].Type);
     }

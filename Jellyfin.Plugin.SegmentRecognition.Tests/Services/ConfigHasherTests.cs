@@ -61,7 +61,7 @@ public class ConfigHasherTests
         var config1 = new PluginConfiguration();
         var config2 = new PluginConfiguration { BlackFrameThreshold = 50.0 };
 
-        // BlackFrame hash is a constant — config changes don't affect it.
+        // BlackFrame hash is a constant - config changes don't affect it.
         Assert.Equal(ConfigHasher.BlackFrame(config1), ConfigHasher.BlackFrame(config2));
     }
 

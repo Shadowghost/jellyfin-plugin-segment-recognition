@@ -86,7 +86,7 @@ public partial class FfmpegBlackFrameService
             },
             cancellationToken).ConfigureAwait(false);
 
-        // Parse the last cropdetect line — it's the most stable value after convergence.
+        // Parse the last cropdetect line - it's the most stable value after convergence.
         (int Width, int Height, int X, int Y)? lastCrop = null;
         foreach (Match match in CropDetectRegex().Matches(stderr))
         {
@@ -107,7 +107,7 @@ public partial class FfmpegBlackFrameService
             return null;
         }
 
-        // If x=0 and y=0 the crop is likely the full frame — no letterboxing
+        // If x=0 and y=0 the crop is likely the full frame - no letterboxing
         if (lastCrop.Value.X == 0 && lastCrop.Value.Y == 0)
         {
             _logger.LogDebug(
@@ -155,7 +155,7 @@ public partial class FfmpegBlackFrameService
         string? videoCodec,
         CancellationToken cancellationToken)
     {
-        // Always use GPU scale when possible — even with crop. When crop is needed, we scale
+        // Always use GPU scale when possible - even with crop. When crop is needed, we scale
         // the crop coordinates proportionally to match the GPU-scaled resolution, then apply
         // crop on CPU after hwdownload. This is much faster than downloading full-resolution
         // frames: e.g. for 4K with letterboxing, hwdownload transfers 853x480 instead of 3840x2160.
@@ -459,7 +459,7 @@ public partial class FfmpegBlackFrameService
 
     /// <summary>
     /// Kills the process and its entire process tree if it hasn't already exited.
-    /// Process.Dispose() does NOT kill the child process — it must be done explicitly.
+    /// Process.Dispose() does NOT kill the child process - it must be done explicitly.
     /// </summary>
     private static void EnsureProcessKilled(Process process)
     {
@@ -472,7 +472,7 @@ public partial class FfmpegBlackFrameService
         }
         catch (InvalidOperationException)
         {
-            // Process already exited between the check and the kill — safe to ignore.
+            // Process already exited between the check and the kill - safe to ignore.
         }
     }
 

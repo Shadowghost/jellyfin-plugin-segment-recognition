@@ -407,7 +407,7 @@ public class ImportIntroSkipperDataTask : IScheduledTask
         connection.Open();
 
         using var command = connection.CreateCommand();
-        // Filter out source rows where Start >= End — intro-skipper occasionally stores swapped
+        // Filter out source rows where Start >= End - intro-skipper occasionally stores swapped
         // or zero-length ranges that would surface as negative-duration "skip" prompts.
         command.CommandText = "SELECT ItemId, Type, Start, \"End\" FROM DbSegment WHERE \"End\" > 0.0 AND Start < \"End\"";
 

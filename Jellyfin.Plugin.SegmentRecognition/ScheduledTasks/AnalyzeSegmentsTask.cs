@@ -106,14 +106,14 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         if (forceOverwrite)
         {
-            _logger.LogInformation("ForceRegenerate is enabled — all segments will be re-pushed to Jellyfin after analysis");
+            _logger.LogInformation("ForceRegenerate is enabled - all segments will be re-pushed to Jellyfin after analysis");
             config.ForceRegenerate = false;
             Plugin.Instance?.SaveConfiguration();
         }
 
         if (config.ReanalyzeBlackFrames)
         {
-            _logger.LogInformation("ReanalyzeBlackFrames is enabled — clearing all cached black frame data");
+            _logger.LogInformation("ReanalyzeBlackFrames is enabled - clearing all cached black frame data");
             config.ReanalyzeBlackFrames = false;
             Plugin.Instance?.SaveConfiguration();
 
@@ -186,7 +186,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             }
         }).ConfigureAwait(false);
 
-        // Movies: no grouping, no comparison — analyze and push each independently.
+        // Movies: no grouping, no comparison - analyze and push each independently.
         await Parallel.ForEachAsync(movies, parallelOptions, async (movie, ct) =>
         {
             await ProcessMovieAsync(movie, config, forceOverwrite, stats, ct).ConfigureAwait(false);
@@ -324,7 +324,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var comparisonHash = ConfigHasher.ChromaprintComparison(config);
 
         // Pending: a fingerprint exists for this season but the item has no Chromaprint
-        // analysis status row — the prior run was cancelled after fingerprinting but before
+        // analysis status row - the prior run was cancelled after fingerprinting but before
         // group comparison.
         var hasPending = await db.ChromaprintResults
             .AsNoTracking()
@@ -358,7 +358,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         }
 
         // Zero-match status with old/missing config hash: previous run found no matches under
-        // different settings — re-run so the new config gets a chance.
+        // different settings - re-run so the new config gets a chance.
         var hasZeroMatchStale = await db.AnalysisStatuses
             .AsNoTracking()
             .Where(s => s.ProviderName == ProviderNames.Chromaprint
@@ -481,7 +481,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             }
         }
 
-        // Chromaprint fingerprinting (generation only — comparison is done per-group later)
+        // Chromaprint fingerprinting (generation only - comparison is done per-group later)
         if (config.EnableChromaprintProvider && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
             && ChromaprintProvider.GetGroupId(item) != Guid.Empty)
         {
@@ -516,7 +516,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         // If the item has a Chromaprint AnalysisStatus but no fingerprint rows, it was marked as
         // already analyzed by an external source (e.g. the intro-skipper import task). Don't
-        // fingerprint it — there's no signal to compare against and re-analysis would defeat the
+        // fingerprint it - there's no signal to compare against and re-analysis would defeat the
         // purpose of the import. Items with at least one fingerprint row fall through to the
         // existing ConfigHash-based regen logic below.
         var hasAnyFingerprint = await db.ChromaprintResults

@@ -96,7 +96,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
 
         if (!File.Exists(edlPath))
         {
-            // EDL file removed — clean up any stale cached data.
+            // EDL file removed - clean up any stale cached data.
             await CleanupCachedDataAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
             return [];
         }
@@ -110,7 +110,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
 
         if (status is not null && status.AnalyzedAt >= lastWriteUtc)
         {
-            // EDL file hasn't changed — serve from cache.
+            // EDL file hasn't changed - serve from cache.
             return await GetCachedSegmentsAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
         }
 
@@ -191,7 +191,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // Split on tabs or spaces — some EDL generators use spaces.
+            // Split on tabs or spaces - some EDL generators use spaces.
             var parts = trimmed.Split(['\t', ' '], StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 3)
             {
@@ -243,7 +243,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // Standard 3-column EDL — collect for position-based classification.
+            // Standard 3-column EDL - collect for position-based classification.
             untyped.Add((startSeconds, endSeconds));
         }
 

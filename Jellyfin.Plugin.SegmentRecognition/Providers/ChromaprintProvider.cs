@@ -368,7 +368,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 cancellationToken).ConfigureAwait(false);
         }
 
-        // Persist segment results before checking HasResults — the AnyAsync queries below
+        // Persist segment results before checking HasResults - the AnyAsync queries below
         // hit the database, not the change tracker, so unsaved additions would be invisible.
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -427,7 +427,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             .CountAsync(s => allItemIds.Contains(s.ItemId) && s.ProviderName == Name && s.HasResults, cancellationToken)
             .ConfigureAwait(false);
         _logger.LogDebug(
-            "Chromaprint: group {GroupId} analysis complete — {Matches} items with matches out of {Total} fingerprinted",
+            "Chromaprint: group {GroupId} analysis complete - {Matches} items with matches out of {Total} fingerprinted",
             groupId,
             matchCount,
             allItemIds.Count);
@@ -450,7 +450,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         var comparisonHash = ConfigHasher.ChromaprintComparison(config);
 
         // =================================================================================
-        // Phase 1 — read existing results (no transaction, no-tracking).
+        // Phase 1 - read existing results (no transaction, no-tracking).
         // Used to decide which fingerprints are already up-to-date and which need a rematch.
         // =================================================================================
         var fingerprintItemIds = fingerprints.Select(f => f.ItemId).Distinct().ToList();
@@ -464,7 +464,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             .ToDictionary(r => r.ItemId);
 
         // =================================================================================
-        // Phase 2 — CPU + I/O (fingerprint comparison, ffmpeg silence + keyframe refinement).
+        // Phase 2 - CPU + I/O (fingerprint comparison, ffmpeg silence + keyframe refinement).
         // This is the slow part (seconds to minutes for large seasons) and runs OUTSIDE any
         // transaction so it can't block concurrent group analyses on the shared SQLite file.
         // Results are accumulated into local lists and applied in Phase 3.
@@ -474,7 +474,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         // Pass the region's own global min-duration to the comparer. No reason to have a
         // provider-specific "ChromaprintMinMatchDuration" when the intro/outro windows
-        // already express exactly what a valid match length looks like — if a user widens
+        // already express exactly what a valid match length looks like - if a user widens
         // MinIntroDurationSeconds to catch short Netflix title cards the comparer should
         // surface them too, not drop them silently.
         var minMatchDurationSeconds = isCredits
@@ -601,7 +601,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 // If this is an outro/credits that ends before the episode's runtime, the
                 // trailing portion is either a real next-episode teaser or just a couple of
                 // seconds of black/silence before EOF. A "Preview" segment shorter than
-                // MinPreviewDurationSeconds is almost certainly the latter — surface it as
+                // MinPreviewDurationSeconds is almost certainly the latter - surface it as
                 // part of the outro instead of a misleading 1-second preview entry. The
                 // upper cap guards against treating long post-credits scenes as previews.
                 if (config.EnablePreviewInference && isCredits && refinedEnd < runtimeTicks)
@@ -660,7 +660,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         // =================================================================================
-        // Phase 3 — apply the planned writes in a short transaction.
+        // Phase 3 - apply the planned writes in a short transaction.
         // The stale-delete + insert pair must be atomic so a rematch never leaves the DB
         // with both the old row and the new one (or neither). Deletes use ExecuteDeleteAsync
         // so no entities have to be re-fetched/tracked.

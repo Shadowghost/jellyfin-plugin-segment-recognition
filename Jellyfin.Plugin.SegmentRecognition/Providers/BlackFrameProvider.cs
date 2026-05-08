@@ -258,7 +258,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug(
-            "BlackFrame: found {SegmentCount} segments for \"{ItemName}\" ({Path}) — {IntroFrames} intro frames, {OutroFrames} outro frames (crop={CropMs}ms, intro={IntroMs}ms/{IntroScan:F0}s, outro={OutroMs}ms/{OutroScan:F0}s)",
+            "BlackFrame: found {SegmentCount} segments for \"{ItemName}\" ({Path}) - {IntroFrames} intro frames, {OutroFrames} outro frames (crop={CropMs}ms, intro={IntroMs}ms/{IntroScan:F0}s, outro={OutroMs}ms/{OutroScan:F0}s)",
             segments.Count,
             item.Name,
             item.Path,

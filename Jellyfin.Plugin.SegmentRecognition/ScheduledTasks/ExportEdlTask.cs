@@ -223,7 +223,7 @@ public class ExportEdlTask : IScheduledTask
             MediaSegmentType.Commercial => 3, // Commercial break
             MediaSegmentType.Recap => 0,     // Skip recap
             MediaSegmentType.Preview => 0,   // Skip preview
-            _ => -1 // Unknown — don't export
+            _ => -1 // Unknown - don't export
         };
     }
 
