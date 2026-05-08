@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/Shadowghost/jellyfin-plugin-segment-recognition/refs/heads/main/images/jellyfin-plugin-segment-recognition.png",
     "versions": [
       {
+        "version": "2026.5.8.1318",
+        "changelog": "",
+        "targetAbi": "10.12.0.0",
+        "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-latest/segment-recognition_2026.5.8.1318.zip",
+        "checksum": "b08103c2a9a00cdc41d3dc314e88bc2f",
+        "timestamp": "2026-05-08T13:18:32Z"
+      },
+      {
         "version": "2026.5.7.2028",
         "changelog": "",
         "targetAbi": "10.12.0.0",
