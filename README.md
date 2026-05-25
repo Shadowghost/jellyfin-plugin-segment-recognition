@@ -19,7 +19,7 @@ A Jellyfin plugin that automatically detects and manages media segments (intros,
 Analysis is decoupled from segment serving:
 
 1. **Providers are cache-only.** When Jellyfin asks a provider for segments, it reads from the plugin's SQLite database. No ffmpeg, no analysis. Exception: EdlImportProvider parses `.edl` files on query.
-2. **A scheduled task does the heavy lifting.** The `Analyze Segments` task (default: daily at 02:00) iterates all video items in a single pass — chapter name analysis, black frame analysis (with crop detection and hw accel), and chromaprint fingerprint generation.
+2. **A scheduled task does the heavy lifting.** The `Analyze Segments` task (default: daily at 02:00) iterates all video items in a single pass - chapter name analysis, black frame analysis (with crop detection and hw accel), and chromaprint fingerprint generation.
 3. **Group comparison pass.** Season groups with new fingerprints or stale results are compared pairwise. Segments pass through the refinement pipeline (silence -> chapter -> keyframe snapping), then are pushed to Jellyfin.
 4. **Per-library provider control.** Respects Jellyfin's per-library `DisabledMediaSegmentProviders` setting. ChromaprintProvider only appears for TV show libraries; ChapterName, BlackFrame, and EdlImport appear for any video library.
 

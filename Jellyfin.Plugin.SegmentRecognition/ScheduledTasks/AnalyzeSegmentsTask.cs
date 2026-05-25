@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Extensions;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Data;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
@@ -106,14 +107,14 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         if (forceOverwrite)
         {
-            _logger.LogInformation("ForceRegenerate is enabled — all segments will be re-pushed to Jellyfin after analysis");
+            _logger.LogInformation("ForceRegenerate is enabled - all segments will be re-pushed to Jellyfin after analysis");
             config.ForceRegenerate = false;
             Plugin.Instance?.SaveConfiguration();
         }
 
         if (config.ReanalyzeBlackFrames)
         {
-            _logger.LogInformation("ReanalyzeBlackFrames is enabled — clearing all cached black frame data");
+            _logger.LogInformation("ReanalyzeBlackFrames is enabled - clearing all cached black frame data");
             config.ReanalyzeBlackFrames = false;
             Plugin.Instance?.SaveConfiguration();
 
@@ -125,19 +126,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        await PruneOrphanedDataAsync(cancellationToken).ConfigureAwait(false);
+
         progress.Report(0);
 
         // Enumerate seasons (with their episodes) and movies upfront so progress can be
         // reported at item granularity even though work is dispatched per season.
-        var seasonEpisodes = new Dictionary<Guid, IReadOnlyList<BaseItem>>();
-        foreach (var sid in GetSeasonIds())
-        {
-            var eps = GetEpisodesInSeason(sid);
-            if (eps.Count > 0)
-            {
-                seasonEpisodes[sid] = eps;
-            }
-        }
+        // One bulk query for every episode in the library, then in-memory grouping by
+        // SeasonId — was N+1 queries (1 for the season list, 1 per season for episodes),
+        // which scales to thousands of round-trips on a large library and blocks the
+        // task before any item gets enqueued.
+        var seasonEpisodes = GetEpisodesGroupedBySeason(cancellationToken);
 
         var movies = GetMovieList();
         var totalItems = seasonEpisodes.Values.Sum(e => e.Count) + movies.Count;
@@ -184,7 +183,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 stats.AnalysisSkipped);
         }).ConfigureAwait(false);
 
-        // Movies: no grouping, no comparison — analyze and push each independently.
+        // Movies: no grouping, no comparison - analyze and push each independently.
         await Parallel.ForEachAsync(movies, parallelOptions, async (movie, ct) =>
         {
             await ProcessMovieAsync(movie, config, forceOverwrite, stats, ct).ConfigureAwait(false);
@@ -220,6 +219,64 @@ public class AnalyzeSegmentsTask : IScheduledTask
             stats.Pushed,
             stats.PushSkipped,
             stats.AnalysisFailed);
+    }
+
+    /// <summary>
+    /// Removes cached rows whose owning <c>ItemId</c> no longer exists in Jellyfin's library.
+    /// <para>
+    /// Jellyfin re-derives <see cref="BaseItem.Id"/> from the item's path and library options.
+    /// File renames, library re-adds, library path changes, and series matching to a different
+    /// provider ID all silently mint a new GUID without firing <c>ItemRemoved</c>.
+    /// </para>
+    /// </summary>
+    private async Task PruneOrphanedDataAsync(CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        var allIds = new HashSet<Guid>();
+        allIds.UnionWith(await db.ChromaprintResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.ChapterAnalysisResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.AnalysisStatuses.AsNoTracking().Select(s => s.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.BlackFrameResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.CropDetectResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // One DB query for every Guid in BaseItems, then in-memory set subtraction.
+        // Avoids N per-item GetItemById lookups that fall through to the DB on a cold
+        // cache after a fresh restart and turn the orphan sweep into minutes of upfront
+        // blocking before any item is enqueued.
+        var validIds = _libraryManager.GetItemIds(new InternalItemsQuery()).ToHashSet();
+        allIds.ExceptWith(validIds);
+
+        if (allIds.Count == 0)
+        {
+            _logger.LogDebug("Orphan sweep: no orphan rows found");
+            return;
+        }
+
+        var orphans = allIds.ToList();
+
+        const int chunkSize = 500;
+        var totalDeleted = 0;
+        for (var i = 0; i < orphans.Count; i += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunk = orphans.Skip(i).Take(chunkSize).ToList();
+            totalDeleted += await db.ChromaprintResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.ChapterAnalysisResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.AnalysisStatuses.Where(s => chunk.Contains(s.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.BlackFrameResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.CropDetectResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        _logger.LogInformation(
+            "Orphan sweep: deleted {Rows} row(s) across {Items} item(s) whose ItemId is no longer in the library",
+            totalDeleted,
+            orphans.Count);
     }
 
     /// <summary>
@@ -322,7 +379,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var comparisonHash = ConfigHasher.ChromaprintComparison(config);
 
         // Pending: a fingerprint exists for this season but the item has no Chromaprint
-        // analysis status row — the prior run was cancelled after fingerprinting but before
+        // analysis status row - the prior run was cancelled after fingerprinting but before
         // group comparison.
         var hasPending = await db.ChromaprintResults
             .AsNoTracking()
@@ -356,7 +413,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         }
 
         // Zero-match status with old/missing config hash: previous run found no matches under
-        // different settings — re-run so the new config gets a chance.
+        // different settings - re-run so the new config gets a chance.
         var hasZeroMatchStale = await db.AnalysisStatuses
             .AsNoTracking()
             .Where(s => s.ProviderName == ProviderNames.Chromaprint
@@ -479,7 +536,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             }
         }
 
-        // Chromaprint fingerprinting (generation only — comparison is done per-group later)
+        // Chromaprint fingerprinting (generation only - comparison is done per-group later)
         if (config.EnableChromaprintProvider && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
             && ChromaprintProvider.GetGroupId(item) != Guid.Empty)
         {
@@ -514,7 +571,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         // If the item has a Chromaprint AnalysisStatus but no fingerprint rows, it was marked as
         // already analyzed by an external source (e.g. the intro-skipper import task). Don't
-        // fingerprint it — there's no signal to compare against and re-analysis would defeat the
+        // fingerprint it - there's no signal to compare against and re-analysis would defeat the
         // purpose of the import. Items with at least one fingerprint row fall through to the
         // existing ConfigHash-based regen logic below.
         var hasAnyFingerprint = await db.ChromaprintResults
@@ -677,25 +734,10 @@ public class AnalyzeSegmentsTask : IScheduledTask
         _logger.LogInformation("Force-push complete: {Pushed} items pushed", pushed);
     }
 
-    private List<Guid> GetSeasonIds()
+    private Dictionary<Guid, IReadOnlyList<BaseItem>> GetEpisodesGroupedBySeason(CancellationToken cancellationToken)
     {
         var query = new InternalItemsQuery
         {
-            IncludeItemTypes = [BaseItemKind.Season],
-            IsVirtualItem = false,
-            DtoOptions = new DtoOptions(true),
-            SourceTypes = [SourceType.Library],
-            Recursive = true
-        };
-
-        return _libraryManager.GetItemList(query).Select(i => i.Id).Distinct().ToList();
-    }
-
-    private IReadOnlyList<BaseItem> GetEpisodesInSeason(Guid seasonId)
-    {
-        var query = new InternalItemsQuery
-        {
-            ParentId = seasonId,
             IncludeItemTypes = [BaseItemKind.Episode],
             MediaTypes = [MediaType.Video],
             IsVirtualItem = false,
@@ -704,7 +746,19 @@ public class AnalyzeSegmentsTask : IScheduledTask
             Recursive = true
         };
 
-        return _libraryManager.GetItemList(query);
+        var allEpisodes = _libraryManager.GetItemList(query);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var grouped = new Dictionary<Guid, IReadOnlyList<BaseItem>>();
+        foreach (var bucket in allEpisodes
+                     .OfType<Episode>()
+                     .Where(e => !e.SeasonId.IsEmpty())
+                     .GroupBy(e => e.SeasonId))
+        {
+            grouped[bucket.Key] = bucket.Cast<BaseItem>().ToList();
+        }
+
+        return grouped;
     }
 
     private IReadOnlyList<BaseItem> GetMovieList()

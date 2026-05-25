@@ -104,35 +104,44 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             return [];
         }
 
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-
-        var existingStatus = await db.AnalysisStatuses
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (existingStatus is null || !existingStatus.HasResults)
+        try
         {
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+            var existingStatus = await db.AnalysisStatuses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existingStatus is null || !existingStatus.HasResults)
+            {
+                return [];
+            }
+
+            var cached = await db.ChapterAnalysisResults
+                .AsNoTracking()
+                .Where(r => r.ItemId == request.ItemId
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
+                    && r.MatchedChapterName != EdlImportProvider.MatchedName)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return cached.Select(r => new MediaSegmentDto
+            {
+                ItemId = r.ItemId,
+                Type = (MediaSegmentType)r.SegmentType,
+                StartTicks = r.StartTicks,
+                EndTicks = r.EndTicks
+            }).ToList();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Host is shutting down - the DbContextFactory's underlying service provider has been
+            // disposed. Return empty rather than letting MediaSegmentManager log this as a failure.
             return [];
         }
-
-        var cached = await db.ChapterAnalysisResults
-            .AsNoTracking()
-            .Where(r => r.ItemId == request.ItemId
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
-                && r.MatchedChapterName != EdlImportProvider.MatchedName)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return cached.Select(r => new MediaSegmentDto
-        {
-            ItemId = r.ItemId,
-            Type = (MediaSegmentType)r.SegmentType,
-            StartTicks = r.StartTicks,
-            EndTicks = r.EndTicks
-        }).ToList();
     }
 
     /// <summary>
@@ -152,7 +161,7 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         var chapters = _chapterManager.GetChapters(itemId);
 
         // Key is (SegmentType, MatchedChapterName). We allow the same SegmentType to appear
-        // more than once per item — e.g. Intro → Commercial → Intro is a valid chapter
+        // more than once per item - e.g. Intro → Commercial → Intro is a valid chapter
         // arrangement, and ad breaks recur per episode. The (type, name) compound key
         // prevents the rare case of literally duplicate chapter titles for the same type
         // from colliding on the DB primary key.
@@ -292,7 +301,7 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             }
             catch (RegexMatchTimeoutException)
             {
-                // Malformed or adversarial chapter name — skip this type
+                // Malformed or adversarial chapter name - skip this type
             }
         }
 

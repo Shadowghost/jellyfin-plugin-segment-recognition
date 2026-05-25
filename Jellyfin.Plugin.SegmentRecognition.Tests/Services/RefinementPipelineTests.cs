@@ -103,7 +103,7 @@ public class RefinementPipelineTests
     [Fact]
     public async Task RefineAsync_ChapterAndKeyframe_ChapterAppliedFirst()
     {
-        // Chapter at 31s, keyframe at 30.5s — chapter snap happens first (to 31s),
+        // Chapter at 31s, keyframe at 30.5s - chapter snap happens first (to 31s),
         // then keyframe snap looks near 31s
         var startTicks = 30 * TimeSpan.TicksPerSecond;
         var endTicks = 120 * TimeSpan.TicksPerSecond;

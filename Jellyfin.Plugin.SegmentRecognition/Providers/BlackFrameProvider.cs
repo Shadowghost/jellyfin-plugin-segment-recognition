@@ -82,44 +82,53 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             return [];
         }
 
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-
-        var existingStatus = await db.AnalysisStatuses
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (existingStatus is null || !existingStatus.HasResults)
+        try
         {
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+            var existingStatus = await db.AnalysisStatuses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existingStatus is null || !existingStatus.HasResults)
+            {
+                return [];
+            }
+
+            var segments = await BuildSegmentsFromCachedFrames(db, request.ItemId, cancellationToken).ConfigureAwait(false);
+
+            // Also serve any preview segments inferred from the outro boundary
+            var preview = await db.ChapterAnalysisResults
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    r => r.ItemId == request.ItemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (preview is not null)
+            {
+                var list = new List<MediaSegmentDto>(segments)
+                {
+                    new MediaSegmentDto
+                    {
+                        ItemId = preview.ItemId,
+                        Type = (MediaSegmentType)preview.SegmentType,
+                        StartTicks = preview.StartTicks,
+                        EndTicks = preview.EndTicks
+                    }
+                };
+                return list;
+            }
+
+            return segments;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Host is shutting down - the DbContextFactory's underlying service provider has been
+            // disposed. Return empty rather than letting MediaSegmentManager log this as a failure.
             return [];
         }
-
-        var segments = await BuildSegmentsFromCachedFrames(db, request.ItemId, cancellationToken).ConfigureAwait(false);
-
-        // Also serve any preview segments inferred from the outro boundary
-        var preview = await db.ChapterAnalysisResults
-            .AsNoTracking()
-            .FirstOrDefaultAsync(
-                r => r.ItemId == request.ItemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview,
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        if (preview is not null)
-        {
-            var list = new List<MediaSegmentDto>(segments)
-            {
-                new MediaSegmentDto
-                {
-                    ItemId = preview.ItemId,
-                    Type = (MediaSegmentType)preview.SegmentType,
-                    StartTicks = preview.StartTicks,
-                    EndTicks = preview.EndTicks
-                }
-            };
-            return list;
-        }
-
-        return segments;
     }
 
     /// <summary>
@@ -258,7 +267,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug(
-            "BlackFrame: found {SegmentCount} segments for \"{ItemName}\" ({Path}) — {IntroFrames} intro frames, {OutroFrames} outro frames (crop={CropMs}ms, intro={IntroMs}ms/{IntroScan:F0}s, outro={OutroMs}ms/{OutroScan:F0}s)",
+            "BlackFrame: found {SegmentCount} segments for \"{ItemName}\" ({Path}) - {IntroFrames} intro frames, {OutroFrames} outro frames (crop={CropMs}ms, intro={IntroMs}ms/{IntroScan:F0}s, outro={OutroMs}ms/{OutroScan:F0}s)",
             segments.Count,
             item.Name,
             item.Path,

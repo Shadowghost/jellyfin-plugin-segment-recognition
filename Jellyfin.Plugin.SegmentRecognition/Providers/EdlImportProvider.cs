@@ -92,64 +92,74 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
         }
 
         var edlPath = Path.ChangeExtension(item.Path, ".edl");
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        if (!File.Exists(edlPath))
+        try
         {
-            // EDL file removed — clean up any stale cached data.
-            await CleanupCachedDataAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
-            return [];
-        }
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        // Check if we already imported this file and it hasn't changed since.
-        var status = await db.AnalysisStatuses
-            .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
-            .ConfigureAwait(false);
-
-        var lastWriteUtc = File.GetLastWriteTimeUtc(edlPath);
-
-        if (status is not null && status.AnalyzedAt >= lastWriteUtc)
-        {
-            // EDL file hasn't changed — serve from cache.
-            return await GetCachedSegmentsAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
-        }
-
-        // Parse the EDL file.
-        var runtimeTicks = item.RunTimeTicks ?? 0;
-        var segments = ParseEdlFile(edlPath, request.ItemId, runtimeTicks);
-
-        // Replace any previous cached results for this item.
-        await db.ChapterAnalysisResults
-            .Where(r => r.ItemId == request.ItemId && r.MatchedChapterName == MatchedName)
-            .ExecuteDeleteAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        if (segments.Count == 0)
-        {
-            _logger.LogDebug("No valid segments found in EDL file {Path}", edlPath);
-            UpdateStatus(db, status, request.ItemId, hasResults: false);
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return [];
-        }
-
-        _logger.LogDebug("Imported {Count} segments from EDL file {Path}", segments.Count, edlPath);
-
-        foreach (var seg in segments)
-        {
-            db.ChapterAnalysisResults.Add(new ChapterAnalysisResult
+            if (!File.Exists(edlPath))
             {
-                ItemId = request.ItemId,
-                SegmentType = (int)seg.Type,
-                StartTicks = seg.StartTicks,
-                EndTicks = seg.EndTicks,
-                MatchedChapterName = MatchedName,
-                CreatedAt = DateTime.UtcNow
-            });
-        }
+                // EDL file removed - clean up any stale cached data.
+                await CleanupCachedDataAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
+                return [];
+            }
 
-        UpdateStatus(db, status, request.ItemId, hasResults: true);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return segments;
+            // Check if we already imported this file and it hasn't changed since.
+            var status = await db.AnalysisStatuses
+                .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
+                .ConfigureAwait(false);
+
+            var lastWriteUtc = File.GetLastWriteTimeUtc(edlPath);
+
+            if (status is not null && status.AnalyzedAt >= lastWriteUtc)
+            {
+                // EDL file hasn't changed - serve from cache.
+                return await GetCachedSegmentsAsync(db, request.ItemId, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Parse the EDL file.
+            var runtimeTicks = item.RunTimeTicks ?? 0;
+            var segments = ParseEdlFile(edlPath, request.ItemId, runtimeTicks);
+
+            // Replace any previous cached results for this item.
+            await db.ChapterAnalysisResults
+                .Where(r => r.ItemId == request.ItemId && r.MatchedChapterName == MatchedName)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (segments.Count == 0)
+            {
+                _logger.LogDebug("No valid segments found in EDL file {Path}", edlPath);
+                UpdateStatus(db, status, request.ItemId, hasResults: false);
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return [];
+            }
+
+            _logger.LogDebug("Imported {Count} segments from EDL file {Path}", segments.Count, edlPath);
+
+            foreach (var seg in segments)
+            {
+                db.ChapterAnalysisResults.Add(new ChapterAnalysisResult
+                {
+                    ItemId = request.ItemId,
+                    SegmentType = (int)seg.Type,
+                    StartTicks = seg.StartTicks,
+                    EndTicks = seg.EndTicks,
+                    MatchedChapterName = MatchedName,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+
+            UpdateStatus(db, status, request.ItemId, hasResults: true);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return segments;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Host is shutting down - the DbContextFactory's underlying service provider has been
+            // disposed. Return empty rather than letting MediaSegmentManager log this as a failure.
+            return [];
+        }
     }
 
     /// <summary>
@@ -191,7 +201,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // Split on tabs or spaces — some EDL generators use spaces.
+            // Split on tabs or spaces - some EDL generators use spaces.
             var parts = trimmed.Split(['\t', ' '], StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 3)
             {
@@ -243,7 +253,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // Standard 3-column EDL — collect for position-based classification.
+            // Standard 3-column EDL - collect for position-based classification.
             untyped.Add((startSeconds, endSeconds));
         }
 

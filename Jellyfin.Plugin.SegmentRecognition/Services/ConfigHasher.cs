@@ -85,14 +85,14 @@ public static class ConfigHasher
     /// Hash of the config values that affect black frame detection.
     /// <para>
     /// Intentionally a constant. Black-frame sample extraction is the single most expensive
-    /// analysis step in the plugin — a single full-episode ffmpeg scan can run for minutes,
+    /// analysis step in the plugin - a single full-episode ffmpeg scan can run for minutes,
     /// and invalidating the cache across a whole library because a knob moved by one is
     /// prohibitively costly. We deliberately break the "hash covers everything that affects
     /// output" contract here; the user-facing escape hatch is the <c>ReanalyzeBlackFrames</c>
     /// toggle in the config page, which force-clears the cache on demand.
     /// </para>
     /// </summary>
-    /// <param name="config">The plugin configuration (unused by design — see remarks).</param>
+    /// <param name="config">The plugin configuration (unused by design - see remarks).</param>
     /// <returns>A 16-character hex hash string.</returns>
     public static string BlackFrame(PluginConfiguration config)
     {

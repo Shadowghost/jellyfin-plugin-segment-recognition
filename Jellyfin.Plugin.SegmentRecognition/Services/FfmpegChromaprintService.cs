@@ -205,7 +205,7 @@ public class FfmpegChromaprintService
                 return null;
             }
 
-            // Try each comma-separated field — the first valid one wins
+            // Try each comma-separated field - the first valid one wins
             var fields = output.Split('\n')[0].Trim().Split(',');
             foreach (var value in fields.Select(f => f.Trim()))
             {
@@ -244,7 +244,7 @@ public class FfmpegChromaprintService
 
     /// <summary>
     /// Kills the process and its entire process tree if it hasn't already exited.
-    /// Process.Dispose() does NOT kill the child process — it must be done explicitly.
+    /// Process.Dispose() does NOT kill the child process - it must be done explicitly.
     /// </summary>
     private static void EnsureProcessKilled(Process process)
     {
@@ -257,7 +257,7 @@ public class FfmpegChromaprintService
         }
         catch (InvalidOperationException)
         {
-            // Process already exited between the check and the kill — safe to ignore.
+            // Process already exited between the check and the kill - safe to ignore.
         }
     }
 }

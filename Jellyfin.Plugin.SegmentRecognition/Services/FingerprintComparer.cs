@@ -23,7 +23,7 @@ public static class FingerprintComparer
     /// Every contiguous run at or above <paramref name="minMatchDurationSeconds"/> is returned,
     /// ordered longest-first, so the caller can pick a region that fits its own duration
     /// constraints (e.g. intro window of 5–120 s) instead of being forced onto the single
-    /// longest match — which can span the shared OP plus post-OP content and overshoot the
+    /// longest match - which can span the shared OP plus post-OP content and overshoot the
     /// window.
     /// </summary>
     /// <param name="fingerprintA">First fingerprint raw bytes.</param>
