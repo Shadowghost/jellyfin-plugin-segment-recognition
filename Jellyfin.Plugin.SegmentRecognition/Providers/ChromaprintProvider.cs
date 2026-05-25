@@ -100,55 +100,61 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             return [];
         }
 
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-
-        var existingStatus = await db.AnalysisStatuses
-            .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (existingStatus is null || !existingStatus.HasResults)
+        try
         {
-            return [];
-        }
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        var cached = await db.ChapterAnalysisResults
-            .AsNoTracking()
-            .Where(r => r.ItemId == request.ItemId
-                && (r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro
-                    || r.MatchedChapterName == SegmentSourceNames.ChromaprintCredits
-                    || r.MatchedChapterName == SegmentSourceNames.ChromaprintPreview))
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
+            var existingStatus = await db.AnalysisStatuses
+                .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
+                .ConfigureAwait(false);
 
-        // Self-heal: if the AnalysisStatus claims HasResults=true but the cross-matched rows
-        // are gone (e.g. wiped by an earlier CleanupExtractedData regression), flip HasResults
-        // back to false so the next AnalyzeSegmentsTask run re-queues the group via the
-        // pendingGroupIds query instead of silently serving empty segments forever.
-        if (cached.Count == 0)
-        {
-            existingStatus.HasResults = false;
-            try
+            if (existingStatus is null || !existingStatus.HasResults)
             {
-                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Chromaprint: self-healed stale HasResults=true on item {ItemId} (no cross-matched rows found)",
-                    request.ItemId);
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                // Another writer updated the row; ignore and let them win.
+                return [];
             }
 
+            var cached = await db.ChapterAnalysisResults
+                .AsNoTracking()
+                .Where(r => r.ItemId == request.ItemId
+                    && (r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro
+                        || r.MatchedChapterName == SegmentSourceNames.ChromaprintCredits
+                        || r.MatchedChapterName == SegmentSourceNames.ChromaprintPreview))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            // Self-heal if the AnalysisStatus claims HasResults=true but the cross-matched rows are gone
+            if (cached.Count == 0)
+            {
+                existingStatus.HasResults = false;
+                try
+                {
+                    await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "Chromaprint: self-healed stale HasResults=true on item {ItemId} (no cross-matched rows found)",
+                        request.ItemId);
+                }
+                catch (DbUpdateConcurrencyException)
+                {
+                    // Another writer updated the row; ignore and let them win.
+                }
+
+                return [];
+            }
+
+            return cached.Select(r => new MediaSegmentDto
+            {
+                ItemId = r.ItemId,
+                Type = (MediaSegmentType)r.SegmentType,
+                StartTicks = r.StartTicks,
+                EndTicks = r.EndTicks
+            }).ToList();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Host is shutting down - the DbContextFactory's underlying service provider has been
+            // disposed. Return empty rather than letting MediaSegmentManager log this as a failure.
             return [];
         }
-
-        return cached.Select(r => new MediaSegmentDto
-        {
-            ItemId = r.ItemId,
-            Type = (MediaSegmentType)r.SegmentType,
-            StartTicks = r.StartTicks,
-            EndTicks = r.EndTicks
-        }).ToList();
     }
 
     /// <summary>
@@ -342,6 +348,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        introFingerprints = FilterOutOrphans(introFingerprints, groupId, SegmentSourceNames.RegionIntro);
+
         await AnalyzeRegionAsync(
             db,
             introFingerprints,
@@ -358,6 +366,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 .Where(r => r.SeasonId == groupId && r.Region == SegmentSourceNames.RegionCredits && r.AnalysisDurationSeconds > 0)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+
+            creditsFingerprints = FilterOutOrphans(creditsFingerprints, groupId, SegmentSourceNames.RegionCredits);
 
             await AnalyzeRegionAsync(
                 db,
@@ -695,5 +705,25 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drops fingerprints whose owning item no longer exists in the library.
+    /// Without this, a ghost fingerprint left over from a silent re-ID.
+    /// </summary>
+    private List<ChromaprintResult> FilterOutOrphans(List<ChromaprintResult> fingerprints, Guid groupId, string region)
+    {
+        var kept = fingerprints.Where(f => _libraryManager.GetItemById(f.ItemId) is not null).ToList();
+        var dropped = fingerprints.Count - kept.Count;
+        if (dropped > 0)
+        {
+            _logger.LogWarning(
+                "Chromaprint: dropped {Dropped} orphan {Region} fingerprint(s) from group {GroupId} - run AnalyzeSegmentsTask to purge them from the DB",
+                dropped,
+                region,
+                groupId);
+        }
+
+        return kept;
     }
 }

@@ -115,35 +115,44 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             return [];
         }
 
-        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-
-        var existingStatus = await db.AnalysisStatuses
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (existingStatus is null || !existingStatus.HasResults)
+        try
         {
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+            var existingStatus = await db.AnalysisStatuses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.ItemId == request.ItemId && s.ProviderName == Name, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existingStatus is null || !existingStatus.HasResults)
+            {
+                return [];
+            }
+
+            var cached = await db.ChapterAnalysisResults
+                .AsNoTracking()
+                .Where(r => r.ItemId == request.ItemId
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
+                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
+                    && r.MatchedChapterName != EdlImportProvider.MatchedName)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return cached.Select(r => new MediaSegmentDto
+            {
+                ItemId = r.ItemId,
+                Type = (MediaSegmentType)r.SegmentType,
+                StartTicks = r.StartTicks,
+                EndTicks = r.EndTicks
+            }).ToList();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Host is shutting down - the DbContextFactory's underlying service provider has been
+            // disposed. Return empty rather than letting MediaSegmentManager log this as a failure.
             return [];
         }
-
-        var cached = await db.ChapterAnalysisResults
-            .AsNoTracking()
-            .Where(r => r.ItemId == request.ItemId
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
-                && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
-                && r.MatchedChapterName != EdlImportProvider.MatchedName)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return cached.Select(r => new MediaSegmentDto
-        {
-            ItemId = r.ItemId,
-            Type = (MediaSegmentType)r.SegmentType,
-            StartTicks = r.StartTicks,
-            EndTicks = r.EndTicks
-        }).ToList();
     }
 
     /// <summary>

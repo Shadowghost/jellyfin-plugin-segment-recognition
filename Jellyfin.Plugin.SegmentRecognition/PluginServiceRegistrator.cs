@@ -1,6 +1,5 @@
 using System.IO;
 using Jellyfin.Plugin.SegmentRecognition.Data;
-using Jellyfin.Plugin.SegmentRecognition.EventHandlers;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
 using Jellyfin.Plugin.SegmentRecognition.ScheduledTasks;
 using Jellyfin.Plugin.SegmentRecognition.Services;
@@ -58,7 +57,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EdlImportProvider>();
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<EdlImportProvider>());
 
-        serviceCollection.AddHostedService<LibraryItemRemovedNotifier>();
         serviceCollection.AddSingleton<IScheduledTask, ImportIntroSkipperDataTask>();
         serviceCollection.AddSingleton<IScheduledTask, AnalyzeSegmentsTask>();
         serviceCollection.AddSingleton<IScheduledTask, ExportEdlTask>();

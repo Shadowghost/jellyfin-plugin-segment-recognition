@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Extensions;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Data;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
@@ -125,6 +126,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        await PruneOrphanedDataAsync(cancellationToken).ConfigureAwait(false);
+
         progress.Report(0);
 
         // Iterate Series → (all episodes of series, grouped by SeasonId in memory).
@@ -222,6 +225,64 @@ public class AnalyzeSegmentsTask : IScheduledTask
             stats.Pushed,
             stats.PushSkipped,
             stats.AnalysisFailed);
+    }
+
+    /// <summary>
+    /// Removes cached rows whose owning <c>ItemId</c> no longer exists in Jellyfin's library.
+    /// <para>
+    /// Jellyfin re-derives <see cref="BaseItem.Id"/> from the item's path and library options.
+    /// File renames, library re-adds, library path changes, and series matching to a different
+    /// provider ID all silently mint a new GUID without firing <c>ItemRemoved</c>.
+    /// </para>
+    /// </summary>
+    private async Task PruneOrphanedDataAsync(CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        var allIds = new HashSet<Guid>();
+        allIds.UnionWith(await db.ChromaprintResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.ChapterAnalysisResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.AnalysisStatuses.AsNoTracking().Select(s => s.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.BlackFrameResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+        allIds.UnionWith(await db.CropDetectResults.AsNoTracking().Select(r => r.ItemId).Distinct().ToListAsync(cancellationToken).ConfigureAwait(false));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // One DB query for every Guid in BaseItems, then in-memory set subtraction.
+        // Avoids N per-item GetItemById lookups that fall through to the DB on a cold
+        // cache after a fresh restart and turn the orphan sweep into minutes of upfront
+        // blocking before any item is enqueued.
+        var validIds = _libraryManager.GetItemIds(new InternalItemsQuery()).ToHashSet();
+        allIds.ExceptWith(validIds);
+
+        if (allIds.Count == 0)
+        {
+            _logger.LogDebug("Orphan sweep: no orphan rows found");
+            return;
+        }
+
+        var orphans = allIds.ToList();
+
+        const int chunkSize = 500;
+        var totalDeleted = 0;
+        for (var i = 0; i < orphans.Count; i += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunk = orphans.Skip(i).Take(chunkSize).ToList();
+            totalDeleted += await db.ChromaprintResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.ChapterAnalysisResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.AnalysisStatuses.Where(s => chunk.Contains(s.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.BlackFrameResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            totalDeleted += await db.CropDetectResults.Where(r => chunk.Contains(r.ItemId)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        _logger.LogInformation(
+            "Orphan sweep: deleted {Rows} row(s) across {Items} item(s) whose ItemId is no longer in the library",
+            totalDeleted,
+            orphans.Count);
     }
 
     /// <summary>
