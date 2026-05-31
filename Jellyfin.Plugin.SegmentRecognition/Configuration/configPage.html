@@ -282,6 +282,13 @@
                                     </div>
                                     <div class="checkboxContainer">
                                         <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableEdlImportProvider" />
+                                            <span>Enable EDL Import Provider</span>
+                                        </label>
+                                        <div class="fieldDescription">Import existing segments from <code>.edl</code> sidecar files next to your media.</div>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label>
                                             <input type="checkbox" is="emby-checkbox" id="chkEnablePreviewInference" />
                                             <span>Enable Preview Inference</span>
                                         </label>
@@ -495,6 +502,13 @@
                                         <input id="txtCreditsAnalysisDuration" type="number" is="emby-input" min="30" step="10" />
                                         <div class="fieldDescription">Duration from the end of the episode to fingerprint for credits detection (default: 240).</div>
                                     </div>
+                                    <div class="checkboxContainer" data-show-when="chkEnableCreditsFingerprinting">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkProbeAudioDuration" />
+                                            <span>Probe Audio Duration</span>
+                                        </label>
+                                        <div class="fieldDescription">Probe the actual audio stream duration via ffprobe before locating the credits region. Guards against MKV containers whose duration is inflated by subtitle tracks that run past the audio/video (default: on).</div>
+                                    </div>
                                 </fieldset>
 
                                 <fieldset class="verticalSection">
@@ -695,8 +709,10 @@
                         document.getElementById('chkEnableChapterNameProvider').checked = config.EnableChapterNameProvider;
                         document.getElementById('chkEnableBlackFrameProvider').checked = config.EnableBlackFrameProvider;
                         document.getElementById('chkEnableChromaprintProvider').checked = config.EnableChromaprintProvider;
+                        document.getElementById('chkEnableEdlImportProvider').checked = config.EnableEdlImportProvider;
                         document.getElementById('chkEnableCreditsFingerprinting').checked = config.EnableCreditsFingerprinting;
                         document.getElementById('txtCreditsAnalysisDuration').value = config.CreditsAnalysisDurationSeconds;
+                        document.getElementById('chkProbeAudioDuration').checked = config.ProbeAudioDuration;
                         document.getElementById('chkEnablePreviewInference').checked = config.EnablePreviewInference;
                         document.getElementById('txtMinPreviewDuration').value = config.MinPreviewDurationSeconds;
                         document.getElementById('txtMaxPreviewDuration').value = config.MaxPreviewDurationSeconds;
@@ -751,8 +767,10 @@
                         config.EnableChapterNameProvider = document.getElementById('chkEnableChapterNameProvider').checked;
                         config.EnableBlackFrameProvider = document.getElementById('chkEnableBlackFrameProvider').checked;
                         config.EnableChromaprintProvider = document.getElementById('chkEnableChromaprintProvider').checked;
+                        config.EnableEdlImportProvider = document.getElementById('chkEnableEdlImportProvider').checked;
                         config.EnableCreditsFingerprinting = document.getElementById('chkEnableCreditsFingerprinting').checked;
                         config.CreditsAnalysisDurationSeconds = parseInt(document.getElementById('txtCreditsAnalysisDuration').value, 10);
+                        config.ProbeAudioDuration = document.getElementById('chkProbeAudioDuration').checked;
                         config.EnablePreviewInference = document.getElementById('chkEnablePreviewInference').checked;
                         config.MinPreviewDurationSeconds = parseInt(document.getElementById('txtMinPreviewDuration').value, 10);
                         config.MaxPreviewDurationSeconds = parseInt(document.getElementById('txtMaxPreviewDuration').value, 10);
