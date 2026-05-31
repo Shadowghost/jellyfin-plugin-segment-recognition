@@ -157,6 +157,14 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var stats = new TaskStats();
         var processed = 0;
 
+        // Load per-item staleness for the entire library in one batched pass (chunked internally),
+        // so the per-season/per-movie hot paths do pure in-memory lookups instead of re-querying
+        // the DB once per season and once per item.
+        var staleness = await LoadStalenessAsync(
+            seasonEpisodes.Values.SelectMany(e => e).Concat(movies).ToList(),
+            config,
+            cancellationToken).ConfigureAwait(false);
+
         var parallelOptions = new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Max(1, Math.Min(config.MaxParallelGroups, Environment.ProcessorCount)),
@@ -167,7 +175,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // run the per-season chromaprint comparison if the season is dirty, then push.
         await Parallel.ForEachAsync(seasonEpisodes, parallelOptions, async (entry, ct) =>
         {
-            await ProcessSeasonAsync(entry.Key, entry.Value, config, forceOverwrite, stats, ct).ConfigureAwait(false);
+            await ProcessSeasonAsync(entry.Key, entry.Value, config, forceOverwrite, staleness, stats, ct).ConfigureAwait(false);
 
             var current = Interlocked.Add(ref processed, entry.Value.Count);
             progress.Report(Math.Min(99.0, 100.0 * current / totalItems));
@@ -186,7 +194,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // Movies: no grouping, no comparison - analyze and push each independently.
         await Parallel.ForEachAsync(movies, parallelOptions, async (movie, ct) =>
         {
-            await ProcessMovieAsync(movie, config, forceOverwrite, stats, ct).ConfigureAwait(false);
+            await ProcessMovieAsync(movie, config, forceOverwrite, staleness, stats, ct).ConfigureAwait(false);
 
             var current = Interlocked.Increment(ref processed);
             progress.Report(Math.Min(99.0, 100.0 * current / totalItems));
@@ -288,6 +296,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         IReadOnlyList<BaseItem> episodes,
         PluginConfiguration config,
         bool forceOverwrite,
+        StalenessSnapshot staleness,
         TaskStats stats,
         CancellationToken cancellationToken)
     {
@@ -302,16 +311,15 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         _logger.LogDebug("Processing season {Label} ({Count} episodes)", seasonLabel, episodes.Count);
 
-        // Pre-compute staleness state for the whole season in a handful of queries instead of
-        // ~6 round-trips per episode. Subsequent in-loop checks become HashSet lookups.
-        var staleness = await LoadStalenessAsync(episodes, config, cancellationToken).ConfigureAwait(false);
+        // Every episode in a season shares the same library, so resolve its options once instead
+        // of once per episode in each loop below.
+        var libraryOptions = _libraryManager.GetLibraryOptions(episodes[0]);
 
         // 1) Analyze each episode (chapters + blackframe + chromaprint fingerprint generation).
         var anyNewWork = false;
         foreach (var ep in episodes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var libraryOptions = _libraryManager.GetLibraryOptions(ep);
             if (await AnalyzeItemAsync(ep, libraryOptions, config, staleness, stats, cancellationToken).ConfigureAwait(false))
             {
                 anyNewWork = true;
@@ -349,7 +357,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
             foreach (var ep in episodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var libraryOptions = _libraryManager.GetLibraryOptions(ep);
                 await PushSegmentsAsync(ep, libraryOptions, forceOverwrite, stats, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -359,11 +366,11 @@ public class AnalyzeSegmentsTask : IScheduledTask
         BaseItem movie,
         PluginConfiguration config,
         bool forceOverwrite,
+        StalenessSnapshot staleness,
         TaskStats stats,
         CancellationToken cancellationToken)
     {
         var libraryOptions = _libraryManager.GetLibraryOptions(movie);
-        var staleness = await LoadStalenessAsync(new[] { movie }, config, cancellationToken).ConfigureAwait(false);
         if (await AnalyzeItemAsync(movie, libraryOptions, config, staleness, stats, cancellationToken).ConfigureAwait(false))
         {
             await PushSegmentsAsync(movie, libraryOptions, forceOverwrite, stats, cancellationToken).ConfigureAwait(false);
@@ -456,6 +463,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var staleChapter = new HashSet<Guid>();
         var staleBlackFrame = new HashSet<Guid>();
         var withFingerprint = new HashSet<Guid>();
+        var fingerprintHashes = new Dictionary<(Guid, string), string?>();
 
         // Chunk by SQLite's parameter cap so a 1000-episode "season" (or a forced movie batch)
         // doesn't blow the IN(...) limit when EF expands Contains().
@@ -508,14 +516,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 .ConfigureAwait(false);
             staleBlackFrame.UnionWith(staleBfIds);
 
-            var fingerprintIds = await db.ChromaprintResults
+            var fingerprintRows = await db.ChromaprintResults
                 .AsNoTracking()
                 .Where(r => chunk.Contains(r.ItemId))
-                .Select(r => r.ItemId)
-                .Distinct()
+                .Select(r => new { r.ItemId, r.Region, r.ConfigHash })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
-            withFingerprint.UnionWith(fingerprintIds);
+            foreach (var r in fingerprintRows)
+            {
+                withFingerprint.Add(r.ItemId);
+                fingerprintHashes[(r.ItemId, r.Region)] = r.ConfigHash;
+            }
         }
 
         return new StalenessSnapshot
@@ -526,6 +537,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             StaleChapterItems = staleChapter,
             StaleBlackFrameItems = staleBlackFrame,
             ItemsWithFingerprint = withFingerprint,
+            FingerprintHashes = fingerprintHashes,
         };
     }
 
@@ -609,12 +621,11 @@ public class AnalyzeSegmentsTask : IScheduledTask
         if (config.EnableChromaprintProvider && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
             && ChromaprintProvider.GetGroupId(item) != Guid.Empty)
         {
-            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-            await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionIntro, config, staleness, stats, cancellationToken).ConfigureAwait(false);
+            await EnsureChromaprintFingerprintAsync(item, SegmentSourceNames.RegionIntro, config, staleness, stats, cancellationToken).ConfigureAwait(false);
 
             if (config.EnableCreditsFingerprinting)
             {
-                await EnsureChromaprintFingerprintAsync(db, item, SegmentSourceNames.RegionCredits, config, staleness, stats, cancellationToken).ConfigureAwait(false);
+                await EnsureChromaprintFingerprintAsync(item, SegmentSourceNames.RegionCredits, config, staleness, stats, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -628,7 +639,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
     }
 
     private async Task EnsureChromaprintFingerprintAsync(
-        SegmentDbContext db,
         BaseItem item,
         string region,
         PluginConfiguration config,
@@ -651,13 +661,11 @@ public class AnalyzeSegmentsTask : IScheduledTask
             return;
         }
 
-        var existing = await db.ChromaprintResults
-            .FirstOrDefaultAsync(r => r.ItemId == item.Id && r.Region == region, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (existing is not null)
+        // In-memory check against the staleness snapshot - no DB round-trip in the common case
+        // where the fingerprint already exists and matches the current config.
+        if (staleness.FingerprintHashes.TryGetValue((item.Id, region), out var existingHash))
         {
-            if (string.Equals(existing.ConfigHash, expectedHash, StringComparison.Ordinal))
+            if (string.Equals(existingHash, expectedHash, StringComparison.Ordinal))
             {
                 return;
             }
@@ -666,8 +674,15 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 "Chromaprint {Region} config changed for \"{ItemName}\", regenerating fingerprint",
                 region,
                 item.Name);
-            db.ChromaprintResults.Remove(existing);
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            // Config changed: drop the stale row so GenerateFingerprintAsync (which skips items
+            // that already have a row) will regenerate it. This is the only path that needs a DB
+            // context here.
+            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await db.ChromaprintResults
+                .Where(r => r.ItemId == item.Id && r.Region == region)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
 
         _logger.LogDebug("Generating chromaprint {Region} fingerprint for \"{ItemName}\" ({Path})", region, item.Name, item.Path);
@@ -840,8 +855,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
     }
 
     /// <summary>
-    /// Pre-computed per-item staleness state, loaded once per group of items so that the
-    /// in-loop hot path avoids ~6 EF round-trips per item.
+    /// Pre-computed per-item staleness state, loaded once for the whole library so that the
+    /// in-loop hot path avoids per-item EF round-trips.
     /// </summary>
     private sealed class StalenessSnapshot
     {
@@ -856,5 +871,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         public HashSet<Guid> StaleBlackFrameItems { get; init; } = [];
 
         public HashSet<Guid> ItemsWithFingerprint { get; init; } = [];
+
+        public Dictionary<(Guid ItemId, string Region), string?> FingerprintHashes { get; init; } = [];
     }
 }
