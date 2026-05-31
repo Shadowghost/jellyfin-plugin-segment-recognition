@@ -26,17 +26,32 @@ public static class ConfigHasher
     private const int ChromaprintComparisonAlgoVersion = 1;
 
     /// <summary>
+    /// Version of the chromaprint fingerprint-generation algorithm, mixed into
+    /// <see cref="ChromaprintIntro"/> and <see cref="ChromaprintCredits"/>.
+    /// <para>
+    /// Fingerprint output depends on frozen, non-config inputs - the hardcoded 22050 Hz sample rate
+    /// and the ffmpeg extraction parameters - which the config-value hash can't see. Bump this when
+    /// any of them change so stored fingerprints are regenerated. Like <see cref="BlackFrame"/>,
+    /// fingerprint extraction is the expensive part, so the token is only mixed in once it moves
+    /// past the v1 baseline: introducing the mechanism must not, by itself, invalidate every
+    /// fingerprint in the library.
+    /// </para>
+    /// </summary>
+    private const int ChromaprintFingerprintAlgoVersion = 1;
+
+    /// <summary>
     /// Hash of the config values that affect chromaprint fingerprint generation for the Intro region.
     /// </summary>
     /// <param name="config">The plugin configuration.</param>
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintIntro(PluginConfiguration config)
     {
-        // Sample rate is no longer configurable (hardcoded at 22050) so it's excluded from the hash.
+        // The frozen sample rate and ffmpeg extraction params aren't config values; they're tracked
+        // by ChromaprintFingerprintAlgoVersion rather than hashed explicitly.
         var input = string.Create(
             CultureInfo.InvariantCulture,
             $"cp-intro|iap={config.IntroAnalysisPercent}|cads={config.ChromaprintAnalysisDurationSeconds}");
-        return ComputeHash(input);
+        return ComputeHash(WithFingerprintVersion(input));
     }
 
     /// <summary>
@@ -49,7 +64,7 @@ public static class ConfigHasher
         var input = string.Create(
             CultureInfo.InvariantCulture,
             $"cp-credits|cads={config.CreditsAnalysisDurationSeconds}|pad={config.ProbeAudioDuration}");
-        return ComputeHash(input);
+        return ComputeHash(WithFingerprintVersion(input));
     }
 
     /// <summary>
@@ -112,6 +127,19 @@ public static class ConfigHasher
     public static string BlackFrame(PluginConfiguration config)
     {
         return ComputeHash("bf|v2");
+    }
+
+    /// <summary>
+    /// Appends the fingerprint algorithm version to a hash input, but only once it moves past the
+    /// v1 baseline. This keeps the very first introduction of the token from changing existing
+    /// fingerprint hashes (which would trigger a costly full-library re-extraction for no benefit),
+    /// while still giving future fingerprint-generation changes a clean invalidation lever.
+    /// </summary>
+    private static string WithFingerprintVersion(string input)
+    {
+        return ChromaprintFingerprintAlgoVersion > 1
+            ? string.Create(CultureInfo.InvariantCulture, $"{input}|fpv={ChromaprintFingerprintAlgoVersion}")
+            : input;
     }
 
     private static string ComputeHash(string input)
