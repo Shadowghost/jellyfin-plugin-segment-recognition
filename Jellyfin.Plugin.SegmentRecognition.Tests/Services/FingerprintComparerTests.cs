@@ -212,6 +212,90 @@ public class FingerprintComparerTests
         }
     }
 
+    /// <summary>
+    /// Regression test for a real intro that matches well within <c>maxBitErrors</c>
+    /// but shares almost no <em>exact</em> 32-bit points (noisy surround→mono downmix)
+    /// and sits at a non-zero alignment shift (variable-length cold open).
+    /// The inverted index only votes on near-exact matches, so the correct shift collects
+    /// just a handful of votes. The old <c>hitCount &lt; minMatchPoints / 4</c> gate discarded it
+    /// before the Hamming scan ever ran, leaving the whole series with no segments. The match must
+    /// now survive the (low) vote gate and be verified by the point-by-point scan.
+    /// </summary>
+    [Fact]
+    public void RealMatchWithFewExactVotes_AtShift_IsStillFound()
+    {
+        var rng = new Random(7);
+
+        // Shared 200-point (~24.8 s) intro region, well above the 15 s minimum.
+        const int sharedPoints = 200;
+        var shared = new uint[sharedPoints];
+        for (int i = 0; i < sharedPoints; i++)
+        {
+            shared[i] = (uint)rng.Next();
+        }
+
+        // Different-length preambles create a non-zero alignment shift, mimicking cold opens of
+        // different lengths in front of the same title sequence.
+        var a = ConcatPoints(RandomPoints(rng, 60), shared, RandomPoints(rng, 80));
+
+        // In B the shared region differs by a single flipped low bit per point (≤ maxBitErrors=6)
+        // so it still matches the Hamming scan, but is never byte-identical and never equals a ±2-bit
+        // rotation of the A point - so the inverted index casts no vote for it. A handful of points
+        // are left identical as alignment seeds: enough that the correct shift clears any sensibly
+        // low vote gate, but far below the old gate of minMatchPoints/4 (≈30) that discarded the
+        // match entirely. Each seed contributes exactly one vote to the (single) correct shift.
+        var seedIndices = new[] { 20, 50, 80, 110, 140, 170 };
+        var perturbed = new uint[sharedPoints];
+        for (int i = 0; i < sharedPoints; i++)
+        {
+            perturbed[i] = Array.IndexOf(seedIndices, i) >= 0 ? shared[i] : shared[i] ^ 1u;
+        }
+
+        var b = ConcatPoints(RandomPoints(rng, 130), perturbed, RandomPoints(rng, 50));
+
+        var results = FingerprintComparer.FindMatchedRegions(
+            a, b, DefaultMaxBitErrors, DefaultMaxTimeSkipSeconds,
+            DefaultInvertedIndexShift, DefaultMinMatchDurationSeconds, CancellationToken.None);
+
+        Assert.NotEmpty(results);
+
+        // The longest region should cover the bulk of the shared intro.
+        var longestSeconds = (results[0].EndTicks - results[0].StartTicks) / (double)TimeSpan.TicksPerSecond;
+        Assert.True(
+            longestSeconds >= DefaultMinMatchDurationSeconds,
+            $"Expected a match of at least {DefaultMinMatchDurationSeconds}s, got {longestSeconds:F1}s");
+    }
+
+    private static uint[] RandomPoints(Random rng, int count)
+    {
+        var points = new uint[count];
+        for (int i = 0; i < count; i++)
+        {
+            points[i] = (uint)rng.Next();
+        }
+
+        return points;
+    }
+
+    private static byte[] ConcatPoints(params uint[][] segments)
+    {
+        var total = 0;
+        foreach (var s in segments)
+        {
+            total += s.Length;
+        }
+
+        var result = new uint[total];
+        var offset = 0;
+        foreach (var s in segments)
+        {
+            Array.Copy(s, 0, result, offset, s.Length);
+            offset += s.Length;
+        }
+
+        return MemoryMarshal.AsBytes(result.AsSpan()).ToArray();
+    }
+
     private static byte[] CreateFingerprint(int pointCount, int seed)
     {
         var rng = new Random(seed);

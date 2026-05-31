@@ -312,37 +312,37 @@ public partial class FfmpegBlackFrameService
                     "-hwaccel", "qsv",
                     "-hwaccel_output_format", "qsv",
                 }
-                : new[]
-                {
+                :
+                [
                     "-init_hw_device", "qsv=qs",
                     "-filter_hw_device", "qs",
                     "-hwaccel", "qsv",
                     "-hwaccel_output_format", "qsv",
-                },
+                ],
 
-            HardwareAccelerationType.vaapi => new[]
-            {
+            HardwareAccelerationType.vaapi =>
+            [
                 "-init_hw_device", "vaapi=va:" + vaapiDevice,
                 "-filter_hw_device", "va",
                 "-hwaccel", "vaapi",
                 "-hwaccel_output_format", "vaapi",
-            },
+            ],
 
-            HardwareAccelerationType.nvenc => new[]
-            {
+            HardwareAccelerationType.nvenc =>
+            [
                 "-init_hw_device", "cuda=cu:0",
                 "-filter_hw_device", "cu",
                 "-hwaccel", "cuda",
                 "-hwaccel_output_format", "cuda",
-            },
+            ],
 
             // VideoToolbox does not require -filter_hw_device
-            HardwareAccelerationType.videotoolbox => new[]
-            {
+            HardwareAccelerationType.videotoolbox =>
+            [
                 "-init_hw_device", "videotoolbox=vt",
                 "-hwaccel", "videotoolbox",
                 "-hwaccel_output_format", "videotoolbox_vld",
-            },
+            ],
 
             _ => []
         };
