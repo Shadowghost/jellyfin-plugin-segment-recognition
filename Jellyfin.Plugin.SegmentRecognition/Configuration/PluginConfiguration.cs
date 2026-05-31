@@ -112,7 +112,7 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>
     /// Gets or sets the chapter name regex patterns that indicate a commercial segment.
-    /// Matches <see cref="Jellyfin.Database.Implementations.Enums.MediaSegmentType.Commercial"/>.
+    /// Matches <see cref="Database.Implementations.Enums.MediaSegmentType.Commercial"/>.
     /// </summary>
     public string[] CommercialChapterNames { get; set; } =
     [

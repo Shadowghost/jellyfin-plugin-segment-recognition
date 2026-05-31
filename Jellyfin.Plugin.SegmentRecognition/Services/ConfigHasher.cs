@@ -13,6 +13,19 @@ namespace Jellyfin.Plugin.SegmentRecognition.Services;
 public static class ConfigHasher
 {
     /// <summary>
+    /// Version of the chromaprint comparison algorithm, mixed into <see cref="ChromaprintComparison"/>.
+    /// <para>
+    /// The comparer's behaviour is driven mostly by code - the inverted-index shift detection, the
+    /// <c>MinShiftVotes</c> gate, and the frozen (non-config) bit-error/time-skip/index-shift
+    /// parameters - none of which the config-value hash can see. Bump this whenever a code change
+    /// alters which segments the matcher produces, so existing chromaprint results are treated as
+    /// stale and re-compared on the next analysis run (fingerprints are unaffected - only the
+    /// comparison + refinement re-runs).
+    /// </para>
+    /// </summary>
+    private const int ChromaprintComparisonAlgoVersion = 1;
+
+    /// <summary>
     /// Hash of the config values that affect chromaprint fingerprint generation for the Intro region.
     /// </summary>
     /// <param name="config">The plugin configuration.</param>
@@ -47,13 +60,15 @@ public static class ConfigHasher
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintComparison(PluginConfiguration config)
     {
-        // Chromaprint algorithm parameters (bit errors, time skip, index shift) are no longer
-        // configurable so they're excluded from the hash.
+        // The frozen chromaprint algorithm parameters (bit errors, time skip, index shift) and the
+        // code-level comparer behaviour aren't config values, so they can't be hashed directly -
+        // ChromaprintComparisonAlgoVersion stands in for them. Bump that constant on any matcher
+        // change that affects output.
         // Min intro/outro also drive the comparer's min-match-duration now, so the intro/outro
         // mins in the hash already capture what ChromaprintMinMatchDurationSeconds used to.
         var input = string.Create(
             CultureInfo.InvariantCulture,
-            $"cp-cmp|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}"
+            $"cp-cmp|algo={ChromaprintComparisonAlgoVersion}|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}"
             + $"|sr={config.EnableSilenceRefinement}|sdb={config.SilenceDetectNoisedB}|smd={config.SilenceDetectMinDurationSeconds}|ssi={config.SilenceSnapInwardSeconds}|sso={config.SilenceSnapOutwardSeconds}"
             + $"|cs={config.EnableChapterSnapping}|csw={config.ChapterSnapWindowSeconds}"
             + $"|ks={config.EnableKeyframeSnapping}|ksw={config.KeyframeSnapWindowSeconds}"

@@ -19,6 +19,23 @@ public static class FingerprintComparer
     private const double SecondsPerPoint = 0.1238;
 
     /// <summary>
+    /// Minimum number of inverted-index votes a candidate alignment shift needs before it is
+    /// worth verifying with the (expensive) point-by-point Hamming scan.
+    /// <para>
+    /// The inverted index only votes when it finds a (near-)exact 32-bit point match, so for
+    /// intros that are similar-on-average but noisy (e.g. surround→mono downmixes, variable-length
+    /// cold opens that push the title sequence to different offsets) the *correct* shift may collect
+    /// only one or two exact votes even though the real intro matches well within
+    /// <c>maxBitErrors</c>. A high threshold here starves those matches entirely - the true shift is
+    /// discarded before <see cref="CollectContiguousMatches"/> ever runs. Keep this low and let the
+    /// Hamming scan (which enforces bit-error, gap, and minimum-duration constraints) be the real
+    /// filter; spurious shifts simply produce no qualifying region. Exact 32-bit collisions between
+    /// unrelated fingerprints are vanishingly rare, so 2 votes is enough to skip pure noise cheaply.
+    /// </para>
+    /// </summary>
+    private const int MinShiftVotes = 2;
+
+    /// <summary>
     /// Compares two fingerprints and returns matched regions using shift-based alignment.
     /// Every contiguous run at or above <paramref name="minMatchDurationSeconds"/> is returned,
     /// ordered longest-first, so the caller can pick a region that fits its own duration
@@ -87,8 +104,9 @@ public static class FingerprintComparer
 
         foreach (var (alignmentShift, hitCount) in shiftCounts)
         {
-            // Skip shifts with too few hits to possibly form a valid match
-            if (hitCount < minMatchPoints / 4)
+            // Skip shifts with too few exact-match votes to be worth a full Hamming scan.
+            // See MinShiftVotes for why this must stay low rather than scale with minMatchPoints.
+            if (hitCount < MinShiftVotes)
             {
                 continue;
             }
