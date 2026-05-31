@@ -263,10 +263,12 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>
     /// Gets or sets a value indicating whether to probe the actual audio stream duration via ffprobe
-    /// before calculating the credits fingerprint region. Enable this if your library contains MKV files
-    /// whose container duration is inflated by subtitle tracks that extend beyond the audio/video.
+    /// before calculating the credits fingerprint region. Defaults to true: it guards against MKV
+    /// containers whose duration is inflated by subtitle tracks that extend beyond the audio/video,
+    /// which would otherwise make the credits region seek past the end of the audio. Not exposed in
+    /// the UI; the extra ffprobe call is cheap and the correct behaviour for typical libraries.
     /// </summary>
-    public bool ProbeAudioDuration { get; set; }
+    public bool ProbeAudioDuration { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether to infer preview segments from credits that end before the episode's runtime.
