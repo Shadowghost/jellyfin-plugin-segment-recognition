@@ -473,6 +473,19 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             .ConfigureAwait(false))
             .ToDictionary(r => r.ItemId);
 
+        // Alternate versions of the same title share (near-)identical audio, so matching a
+        // version against its own sibling yields a degenerate whole-window match instead of
+        // the common intro/credits. Map each fingerprint to its logical title (the primary
+        // version) and only compare fingerprints of *different* titles.
+        var titleIdByItem = new Dictionary<Guid, Guid>(fingerprintItemIds.Count);
+        foreach (var id in fingerprintItemIds)
+        {
+            titleIdByItem[id] = _libraryManager.GetItemById(id) is Video { PrimaryVersionId: { } primaryId }
+                && primaryId != Guid.Empty
+                ? primaryId
+                : id;
+        }
+
         // =================================================================================
         // Phase 2 - CPU + I/O (fingerprint comparison, ffmpeg silence + keyframe refinement).
         // This is the slow part (seconds to minutes for large seasons) and runs OUTSIDE any
@@ -521,6 +534,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 }
 
                 var other = fingerprints[j];
+
+                // Never match a title against another version of itself (see titleIdByItem).
+                if (titleIdByItem[current.ItemId] == titleIdByItem[other.ItemId])
+                {
+                    continue;
+                }
+
                 var matchedRegions = FingerprintComparer.FindMatchedRegions(
                     current.FingerprintData,
                     other.FingerprintData,
