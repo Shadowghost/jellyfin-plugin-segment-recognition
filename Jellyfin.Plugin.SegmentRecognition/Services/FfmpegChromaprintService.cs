@@ -47,7 +47,7 @@ public class FfmpegChromaprintService
         double durationSeconds,
         CancellationToken cancellationToken)
     {
-        var tempFile = Path.Combine(
+        var tempFile = Path.Join(
             Path.GetTempPath(),
             "jellyfin-segrec-" + Guid.NewGuid().ToString("N") + ".chromaprint");
 

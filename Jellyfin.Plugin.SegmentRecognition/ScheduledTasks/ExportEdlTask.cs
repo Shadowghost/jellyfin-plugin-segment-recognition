@@ -254,7 +254,8 @@ public class ExportEdlTask : IScheduledTask
             IncludeItemTypes = _itemTypes,
             DtoOptions = new DtoOptions(true),
             SourceTypes = [SourceType.Library],
-            Recursive = true
+            Recursive = true,
+            IncludeOwnedItems = true
         };
 
         return _libraryManager.GetCount(query);
@@ -271,7 +272,8 @@ public class ExportEdlTask : IScheduledTask
             SourceTypes = [SourceType.Library],
             Recursive = true,
             Limit = PageSize,
-            StartIndex = startIndex
+            StartIndex = startIndex,
+            IncludeOwnedItems = true
         };
 
         return _libraryManager.GetItemList(query);

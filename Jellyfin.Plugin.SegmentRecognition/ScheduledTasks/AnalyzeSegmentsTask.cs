@@ -257,7 +257,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // Avoids N per-item GetItemById lookups that fall through to the DB on a cold
         // cache after a fresh restart and turn the orphan sweep into minutes of upfront
         // blocking before any item is enqueued.
-        var validIds = _libraryManager.GetItemIds(new InternalItemsQuery()).ToHashSet();
+        var validIds = _libraryManager.GetItemIds(new InternalItemsQuery { IncludeOwnedItems = true }).ToHashSet();
         allIds.ExceptWith(validIds);
 
         if (allIds.Count == 0)
@@ -821,7 +821,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
             IsVirtualItem = false,
             DtoOptions = new DtoOptions(true),
             SourceTypes = [SourceType.Library],
-            Recursive = true
+            Recursive = true,
+            IncludeOwnedItems = true
         };
 
         var allEpisodes = _libraryManager.GetItemList(query);
@@ -848,7 +849,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
             IsVirtualItem = false,
             DtoOptions = new DtoOptions(true),
             SourceTypes = [SourceType.Library],
-            Recursive = true
+            Recursive = true,
+            IncludeOwnedItems = true
         };
 
         return _libraryManager.GetItemList(query);
