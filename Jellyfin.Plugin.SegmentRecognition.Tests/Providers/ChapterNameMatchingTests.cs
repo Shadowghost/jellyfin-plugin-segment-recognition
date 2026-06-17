@@ -220,6 +220,145 @@ public class ChapterNameMatchingTests
         Assert.False(AnyMatches(regexes[MediaSegmentType.Intro], "Intro End"));
     }
 
+    [Theory]
+    [InlineData("Intro: End", MediaSegmentType.Intro)]
+    [InlineData("Credits: End", MediaSegmentType.Outro)]
+    [InlineData("Preview: End", MediaSegmentType.Preview)]
+    [InlineData("Recap: End", MediaSegmentType.Recap)]
+    [InlineData("Commercial: End", MediaSegmentType.Commercial)]
+    public void BuildRegexes_NegativeLookahead_RejectsColonDelimitedEndLabels(string chapterName, MediaSegmentType type)
+    {
+        var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
+
+        Assert.False(AnyMatches(regexes[type], chapterName));
+    }
+
+    [Theory]
+    [InlineData("Intro: Endgame")]  // "Endgame" is not the "End" marker word
+    [InlineData("Intro: Ending")]
+    [InlineData("Intro Endeavour")]
+    public void BuildRegexes_EndMarkerLookahead_AllowsWordsMerelyStartingWithEnd(string chapterName)
+    {
+        // Single-keyword config isolates the lookahead from competing keywords like "Ending".
+        var config = OnlyIntro("Intro");
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], chapterName));
+    }
+
+    // --- Punctuation-delimited word boundaries ---
+
+    [Theory]
+    [InlineData("(Intro)")]
+    [InlineData("[Intro]")]
+    [InlineData("Intro.")]
+    [InlineData("Recap/Intro")]
+    [InlineData("Intro, part 1")]
+    public void BuildRegexes_MatchesPunctuationDelimitedKeywords(string chapterName)
+    {
+        var config = OnlyIntro("Intro");
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Intro], chapterName));
+    }
+
+    [Theory]
+    [InlineData("Introvert")]
+    [InlineData("Introspection")]
+    [InlineData("Reintroduce")]
+    public void BuildRegexes_WidenedBoundaries_StillRejectSubstrings(string chapterName)
+    {
+        var config = OnlyIntro("Intro");
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        Assert.False(AnyMatches(regexes[MediaSegmentType.Intro], chapterName));
+    }
+
+    // --- Match precedence (longest keyword wins) ---
+
+    [Fact]
+    public void MatchChapterName_PrefersLongestKeyword_AcrossTypes()
+    {
+        var config = new PluginConfiguration
+        {
+            IntroChapterNames = ["Intro"],
+            OutroChapterNames = ["Intro Credits"],
+            RecapChapterNames = [],
+            PreviewChapterNames = [],
+            CommercialChapterNames = []
+        };
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        // "Intro Credits" matches the Intro keyword "Intro" (len 5) and the Outro keyword
+        // "Intro Credits" (len 13); the longer, more specific Outro keyword wins even though
+        // Intro is registered first.
+        Assert.Equal(MediaSegmentType.Outro, ChapterNameProvider.MatchChapterName(regexes, "Intro Credits"));
+    }
+
+    [Fact]
+    public void MatchChapterName_TieBreaksByEarliestPosition()
+    {
+        var config = new PluginConfiguration
+        {
+            IntroChapterNames = ["Opening"],
+            OutroChapterNames = ["Credits"],
+            RecapChapterNames = [],
+            PreviewChapterNames = [],
+            CommercialChapterNames = []
+        };
+
+        var regexes = ChapterNameProvider.BuildRegexes(config);
+
+        // "Opening" and "Credits" are equal-length matches; "Opening" appears first, so it wins.
+        Assert.Equal(MediaSegmentType.Intro, ChapterNameProvider.MatchChapterName(regexes, "Opening Credits"));
+        // Reversed order flips the winner - resolution follows position, not registration order
+        // (Intro is registered before Outro, yet Outro wins here because "Credits" comes first).
+        Assert.Equal(MediaSegmentType.Outro, ChapterNameProvider.MatchChapterName(regexes, "Credits, then Opening"));
+    }
+
+    // --- Added default synonyms ---
+
+    [Theory]
+    [InlineData("PV")]
+    [InlineData("Teaser")]
+    [InlineData("Trailer")]
+    [InlineData("Sneak Peek")]
+    [InlineData("Coming Up")]
+    [InlineData("Coming Soon")]
+    [InlineData("Next on")]
+    public void BuildRegexes_DefaultConfig_MatchesAddedPreviewSynonyms(string chapterName)
+    {
+        var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
+
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Preview], chapterName));
+    }
+
+    [Theory]
+    [InlineData("Summary")]
+    [InlineData("Previously")]
+    [InlineData("Last time")]
+    [InlineData("Catch up")]
+    [InlineData("Catch-up")]
+    public void BuildRegexes_DefaultConfig_MatchesAddedRecapSynonyms(string chapterName)
+    {
+        var regexes = ChapterNameProvider.BuildRegexes(new PluginConfiguration());
+
+        Assert.True(AnyMatches(regexes[MediaSegmentType.Recap], chapterName));
+    }
+
+    private static PluginConfiguration OnlyIntro(params string[] introNames) => new()
+    {
+        IntroChapterNames = introNames,
+        OutroChapterNames = [],
+        RecapChapterNames = [],
+        PreviewChapterNames = [],
+        CommercialChapterNames = []
+    };
+
     // --- yt-dlp SponsorBlock chapter recognition (via default chapter-name lists) ---
 
     [Theory]

@@ -43,6 +43,35 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         ImportIntroSkipperDataTask.MatchedName,
     ];
 
+    /// <summary>
+    /// Characters that may precede a chapter keyword and still count as a word boundary:
+    /// start-of-string, whitespace, or common separators/openers (<c>- / ( [</c>). This lets a
+    /// base keyword match punctuation-delimited titles such as "(Intro)" or "Recap/Intro"
+    /// without having to enumerate every bracketed variant as its own literal.
+    /// </summary>
+    private const string LeadingBoundary = @"(?:^|[\s\-/(\[])";
+
+    /// <summary>
+    /// Characters that may follow a chapter keyword and still count as a word boundary:
+    /// whitespace, common separators/closers, sentence punctuation, or end-of-string. The
+    /// boundary requirement still prevents substring matches such as "Intro" in "Introvert".
+    /// </summary>
+    private const string TrailingBoundary = @"(?:[\s:)\]/.,!?]|$)";
+
+    /// <summary>
+    /// Rejects keywords immediately followed by an "End" marker (e.g. "Intro End",
+    /// "Credits: End"), which denote the end boundary of a segment rather than the segment
+    /// itself. The trailing <c>\b</c> keeps words merely starting with "End" (e.g. "Ending",
+    /// "Endgame") from being mistaken for the marker.
+    /// </summary>
+    private const string EndMarkerLookahead = @"(?![\s:]+End\b)";
+
+    /// <summary>
+    /// Name of the regex capture group holding the matched keyword, used to rank competing
+    /// matches by specificity (longest matched keyword wins).
+    /// </summary>
+    private const string KeywordGroup = "keyword";
+
     private static readonly TimeSpan _regexTimeout = TimeSpan.FromSeconds(1);
 
     /// <summary>
@@ -308,15 +337,35 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             return null;
         }
 
+        // A chapter name can match more than one type - e.g. "Opening Credits" hits both the
+        // Intro keyword "Opening" and the Outro keyword "Credits". Resolve by:
+        //   1. longest matched keyword first (the most specific match - this is what lets a
+        //      multi-word literal like "Preview/Recap" win over a bare "Preview"), then
+        //   2. earliest position in the title as a tie-break, so equally specific matches
+        //      follow reading order ("the title leads with what it is") rather than the
+        //      arbitrary type-registration order.
+        MediaSegmentType? bestType = null;
+        var bestLength = 0;
+        var bestIndex = int.MaxValue;
+
         foreach (var (type, typeRegexes) in regexes)
         {
             foreach (var regex in typeRegexes)
             {
                 try
                 {
-                    if (regex.IsMatch(chapterName))
+                    var match = regex.Match(chapterName);
+                    if (!match.Success)
                     {
-                        return type;
+                        continue;
+                    }
+
+                    var keyword = match.Groups[KeywordGroup];
+                    if (keyword.Length > bestLength || (keyword.Length == bestLength && keyword.Index < bestIndex))
+                    {
+                        bestLength = keyword.Length;
+                        bestIndex = keyword.Index;
+                        bestType = type;
                     }
                 }
                 catch (RegexMatchTimeoutException)
@@ -326,7 +375,7 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             }
         }
 
-        return null;
+        return bestType;
     }
 
     private MediaSegmentType? MatchChapterName(string chapterName) => MatchChapterName(_regexes, chapterName);
@@ -369,8 +418,8 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         var compiled = new Regex[patterns.Length];
         for (var i = 0; i < patterns.Length; i++)
         {
-            var pattern = @"(^|\s)(" + Regex.Escape(patterns[i]) + @")(?!\s+End)(\s|:|$)";
-            compiled[i] = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled, _regexTimeout);
+            var pattern = LeadingBoundary + @"(?<" + KeywordGroup + ">" + Regex.Escape(patterns[i]) + ")" + EndMarkerLookahead + TrailingBoundary;
+            compiled[i] = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled, _regexTimeout);
         }
 
         regexes[type] = compiled;

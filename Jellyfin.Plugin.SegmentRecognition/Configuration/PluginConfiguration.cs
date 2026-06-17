@@ -88,7 +88,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public string[] RecapChapterNames { get; set; } =
     [
         "Recap",
+        "Previously",
         "Previously on",
+        "Summary",
+        "Last time",
+        "Catch up",
+        "Catch-up",
         "Resumen",
         "R\u00e9sum\u00e9",
         "Zusammenfassung",
@@ -102,8 +107,15 @@ public class PluginConfiguration : BasePluginConfiguration
     public string[] PreviewChapterNames { get; set; } =
     [
         "Preview",
+        "PV",
         "Next time",
+        "Next on",
         "Next Episode",
+        "Coming Up",
+        "Coming Soon",
+        "Sneak Peek",
+        "Teaser",
+        "Trailer",
         "Avance",
         "Aper\u00e7u",
         "Vorschau",
