@@ -401,8 +401,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// </summary>
     /// <param name="groupId">The group identifier (season ID or album ID).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
+    /// <returns>
+    /// The items that had chromaprint segments before this run and have none after it, because a
+    /// rematch failed or the season-position check discarded what they had. The caller has to push
+    /// these even though they now have nothing to offer: the push is the only thing that clears
+    /// the segment Jellyfin is still serving.
+    /// </returns>
+    public async Task<IReadOnlyCollection<Guid>> AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
@@ -487,6 +492,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         var currentComparisonHash = ConfigHasher.ChromaprintComparison(config);
+        var lostResults = new List<Guid>();
 
         foreach (var itemId in allItemIds)
         {
@@ -499,6 +505,11 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
             if (existingStatuses.TryGetValue(itemId, out var existingStatus))
             {
+                if (existingStatus.HasResults && !hasResults)
+                {
+                    lostResults.Add(itemId);
+                }
+
                 existingStatus.HasResults = hasResults;
                 existingStatus.AnalyzedAt = DateTime.UtcNow;
                 existingStatus.ConfigHash = currentComparisonHash;
@@ -543,6 +554,16 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             groupId,
             matchCount,
             allItemIds.Count);
+
+        if (lostResults.Count > 0)
+        {
+            _logger.LogDebug(
+                "Chromaprint: {Count} item(s) in group {GroupId} lost their segments and need a push to clear them",
+                lostResults.Count,
+                groupId);
+        }
+
+        return lostResults;
     }
 
     /// <summary>

@@ -415,6 +415,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // 2) Chromaprint per-season comparison. Only run if at least one episode is fingerprintable
         //    AND either we just generated new fingerprints OR previously stored results are stale.
         var ranComparison = false;
+
+        // Items whose segments were removed by this comparison. They no longer pass the
+        // "has results" test in PushSegmentsAsync, but they are exactly the items that must be
+        // pushed: the push is what tells Jellyfin to drop the segment it is still serving.
+        var lostResults = new HashSet<Guid>();
+
         var hasFingerprintableItems = episodes.Any(e => ChromaprintProvider.GetGroupId(e) != Guid.Empty);
         if (config.EnableChromaprintProvider && hasFingerprintableItems)
         {
@@ -424,7 +430,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 _logger.LogDebug("Comparing fingerprints for {Label} ({Count} episodes)", seasonLabel, episodes.Count);
                 try
                 {
-                    await _chromaprintProvider.AnalyzeGroupAsync(seasonId, cancellationToken).ConfigureAwait(false);
+                    lostResults.UnionWith(
+                        await _chromaprintProvider.AnalyzeGroupAsync(seasonId, cancellationToken).ConfigureAwait(false));
                     stats.IncrementSeasonsAnalyzed();
                     ranComparison = true;
                 }
@@ -443,7 +450,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
             foreach (var ep in episodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await PushSegmentsAsync(ep, libraryOptions, forceOverwrite, stats, cancellationToken).ConfigureAwait(false);
+                await PushSegmentsAsync(
+                    ep,
+                    libraryOptions,
+                    forceOverwrite,
+                    stats,
+                    cancellationToken,
+                    pushWithoutResults: lostResults.Contains(ep.Id)).ConfigureAwait(false);
             }
         }
     }
@@ -819,12 +832,28 @@ public class AnalyzeSegmentsTask : IScheduledTask
         }
     }
 
+    /// <summary>
+    /// Hands one item to Jellyfin's segment providers.
+    /// </summary>
+    /// <param name="item">The item to push.</param>
+    /// <param name="libraryOptions">The owning library's options.</param>
+    /// <param name="forceOverwrite">Whether to replace segments Jellyfin already holds.</param>
+    /// <param name="stats">Run statistics.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="pushWithoutResults">
+    /// Push even though no provider reports results. Set for items whose segments were just
+    /// removed: they fail the results test by definition, yet skipping them is what would leave
+    /// Jellyfin serving a segment the plugin no longer believes in. Providers return nothing for
+    /// such an item, which is precisely what makes Jellyfin delete what it has.
+    /// </param>
+    /// <returns>A task representing the asynchronous operation.</returns>
     private async Task PushSegmentsAsync(
         BaseItem item,
         MediaBrowser.Model.Configuration.LibraryOptions libraryOptions,
         bool forceOverwrite,
         TaskStats stats,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool pushWithoutResults = false)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
@@ -832,7 +861,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             .AnyAsync(s => s.ItemId == item.Id && s.HasResults, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!hasResults)
+        if (!hasResults && !pushWithoutResults)
         {
             stats.IncrementPushSkipped();
             return;
