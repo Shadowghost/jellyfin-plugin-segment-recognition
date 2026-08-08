@@ -67,8 +67,11 @@ public class SegmentDbContext : DbContext
 
         modelBuilder.Entity<ChapterAnalysisResult>(entity =>
         {
-            entity.HasKey(e => new { e.ItemId, e.SegmentType, e.MatchedChapterName });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedOnAdd();
             entity.HasIndex(e => e.ItemId);
+            entity.HasIndex(e => new { e.ItemId, e.SegmentType, e.MatchedChapterName, e.StartTicks })
+                .IsUnique();
         });
 
         modelBuilder.Entity<CropDetectResult>(entity =>

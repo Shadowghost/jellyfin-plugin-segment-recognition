@@ -36,7 +36,7 @@ public class ImportIntroSkipperDataTask : IScheduledTask
     /// produced by this task. Treated as "foreign" by <see cref="Providers.ChapterNameProvider"/>
     /// so chapter-config changes don't wipe the imported data on the next analyze run.
     /// </summary>
-    internal const string MatchedName = "intro-skipper import";
+    internal const string MatchedName = SegmentSourceNames.IntroSkipperImportName;
 
     /// <summary>
     /// Hard upper bound on the decompressed size of a single intro-skipper fingerprint blob.
@@ -156,8 +156,12 @@ public class ImportIntroSkipperDataTask : IScheduledTask
                 continue;
             }
 
-            // Write all segments for this item as ChapterAnalysisResult rows
-            foreach (var (segmentType, startTicks, endTicks) in segmentsByItem[itemId])
+            // Write all segments for this item as ChapterAnalysisResult rows. All rows share the
+            // import sentinel, so (type, start) is what distinguishes them in storage - dedupe on
+            // that pair so a source DB with repeated rows can't violate the unique index.
+            foreach (var (segmentType, startTicks, endTicks) in segmentsByItem[itemId]
+                         .GroupBy(s => (s.SegmentType, s.StartTicks))
+                         .Select(g => g.First()))
             {
                 db.ChapterAnalysisResults.Add(new ChapterAnalysisResult
                 {

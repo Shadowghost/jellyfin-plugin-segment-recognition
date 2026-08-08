@@ -3,7 +3,6 @@ using System.IO;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Model.MediaSegments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;

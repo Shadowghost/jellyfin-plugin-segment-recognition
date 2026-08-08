@@ -7,9 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Plugin.SegmentRecognition.Providers;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
-using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Model.MediaSegments;
@@ -72,7 +72,11 @@ public class ExportEdlTask : IScheduledTask
         _logger.LogInformation("EDL export task starting");
         progress.Report(0);
 
-        var totalItems = GetTotalItemCount();
+        // Snapshot the id set once and page over it in memory. Paging the library query itself
+        // with StartIndex requires a total order to be well-defined, and no unique sort key is
+        // exposed - an unstable order silently skips and duplicates items across pages.
+        var allIds = GetAllItemIds();
+        var totalItems = allIds.Count;
         if (totalItems == 0)
         {
             _logger.LogInformation("No items to export, task complete");
@@ -85,15 +89,10 @@ public class ExportEdlTask : IScheduledTask
         var deleted = 0;
         var errors = 0;
         var processed = 0;
-        var startIndex = 0;
 
-        while (startIndex < totalItems)
+        foreach (var idChunk in allIds.Chunk(PageSize))
         {
-            var page = GetItemPage(startIndex);
-            if (page.Count == 0)
-            {
-                break;
-            }
+            var page = GetItemsByIds(idChunk);
 
             foreach (var item in page)
             {
@@ -124,8 +123,6 @@ public class ExportEdlTask : IScheduledTask
                 processed++;
                 progress.Report(100.0 * processed / totalItems);
             }
-
-            startIndex += PageSize;
         }
 
         progress.Report(100);
@@ -156,9 +153,17 @@ public class ExportEdlTask : IScheduledTask
 
         if (segments.Count == 0)
         {
-            // Clean up stale EDL file if no segments exist
+            // Clean up a stale EDL file, but only one we wrote ourselves. A hand-authored sidecar
+            // (or one from another tool) is user data and an input to EdlImportProvider - deleting
+            // it because we currently have nothing to say would destroy it irrecoverably.
             if (File.Exists(edlPath))
             {
+                if (!EdlImportProvider.IsGeneratedByThisPlugin(edlPath))
+                {
+                    _logger.LogDebug("Leaving externally-authored EDL file {Path} untouched", edlPath);
+                    return (false, false);
+                }
+
                 File.Delete(edlPath);
                 _logger.LogDebug("Deleted stale EDL file {Path}", edlPath);
                 return (false, true);
@@ -167,6 +172,14 @@ public class ExportEdlTask : IScheduledTask
             return (false, false);
         }
 
+        return await WriteEdlAsync(edlPath, segments, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(bool Written, bool Deleted)> WriteEdlAsync(
+        string edlPath,
+        List<MediaSegmentDto> segments,
+        CancellationToken cancellationToken)
+    {
         var lines = new List<string>(segments.Count);
         foreach (var segment in segments)
         {
@@ -193,13 +206,32 @@ public class ExportEdlTask : IScheduledTask
             return (false, false);
         }
 
-        var content = string.Join("\n", lines) + "\n";
+        var body = string.Join("\n", lines) + "\n";
 
-        // Only write if content changed
+        // The marker identifies the file as ours: EdlImportProvider skips it (so exports don't get
+        // re-imported as a second provider's segments) and the delete path above refuses to touch
+        // anything without it.
+        var content = EdlImportProvider.GeneratedMarker + "\n" + body;
+
         if (File.Exists(edlPath))
         {
             var existing = await File.ReadAllTextAsync(edlPath, cancellationToken).ConfigureAwait(false);
-            if (string.Equals(existing, content, StringComparison.Ordinal))
+
+            if (!EdlImportProvider.IsGeneratedByThisPlugin(edlPath))
+            {
+                // Exports written before the marker existed are unmarked but are byte-for-byte
+                // what this task would produce. Recognising that lets an upgrade re-stamp its own
+                // old output instead of orphaning it forever, without ever guessing about a file
+                // it cannot prove it wrote.
+                if (!string.Equals(existing, body, StringComparison.Ordinal))
+                {
+                    _logger.LogDebug("Leaving externally-authored EDL file {Path} untouched", edlPath);
+                    return (false, false);
+                }
+
+                _logger.LogDebug("Re-stamping previously exported EDL file {Path} with the generated marker", edlPath);
+            }
+            else if (string.Equals(existing, content, StringComparison.Ordinal))
             {
                 return (false, false);
             }
@@ -245,7 +277,7 @@ public class ExportEdlTask : IScheduledTask
         };
     }
 
-    private int GetTotalItemCount()
+    private IReadOnlyList<Guid> GetAllItemIds()
     {
         var query = new InternalItemsQuery
         {
@@ -258,21 +290,15 @@ public class ExportEdlTask : IScheduledTask
             IncludeOwnedItems = true
         };
 
-        return _libraryManager.GetCount(query);
+        return _libraryManager.GetItemIds(query);
     }
 
-    private IReadOnlyList<BaseItem> GetItemPage(int startIndex)
+    private IReadOnlyList<BaseItem> GetItemsByIds(Guid[] ids)
     {
         var query = new InternalItemsQuery
         {
-            MediaTypes = [MediaType.Video],
-            IsVirtualItem = false,
-            IncludeItemTypes = _itemTypes,
+            ItemIds = ids,
             DtoOptions = new DtoOptions(true),
-            SourceTypes = [SourceType.Library],
-            Recursive = true,
-            Limit = PageSize,
-            StartIndex = startIndex,
             IncludeOwnedItems = true
         };
 

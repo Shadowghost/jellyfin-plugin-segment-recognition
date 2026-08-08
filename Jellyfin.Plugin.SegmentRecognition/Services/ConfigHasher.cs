@@ -15,29 +15,38 @@ public static class ConfigHasher
     /// <summary>
     /// Version of the chromaprint comparison algorithm, mixed into <see cref="ChromaprintComparison"/>.
     /// <para>
-    /// The comparer's behaviour is driven mostly by code - the inverted-index shift detection, the
-    /// <c>MinShiftVotes</c> gate, and the frozen (non-config) bit-error/time-skip/index-shift
-    /// parameters - none of which the config-value hash can see. Bump this whenever a code change
-    /// alters which segments the matcher produces, so existing chromaprint results are treated as
-    /// stale and re-compared on the next analysis run (fingerprints are unaffected - only the
-    /// comparison + refinement re-runs).
+    /// Part of the comparer's behaviour is driven by code the config-value hash cannot see - the
+    /// inverted-index fuzzing strategy, the <c>MinShiftVotes</c> gate, the consensus rule. Bump
+    /// this whenever a code change alters which segments the matcher produces, so existing
+    /// chromaprint results are treated as stale and re-compared on the next analysis run
+    /// (fingerprints are unaffected - only the comparison + refinement re-runs).
+    /// </para>
+    /// <para>
+    /// v2: the index fuzz became arithmetic rather than a bit rotation, the index maps every
+    /// occurrence instead of only the first, run length is counted in points, and a matched
+    /// region now needs agreement from more than one counterpart.
     /// </para>
     /// </summary>
-    private const int ChromaprintComparisonAlgoVersion = 1;
+    private const int ChromaprintComparisonAlgoVersion = 2;
 
     /// <summary>
     /// Version of the chromaprint fingerprint-generation algorithm, mixed into
     /// <see cref="ChromaprintIntro"/> and <see cref="ChromaprintCredits"/>.
     /// <para>
-    /// Fingerprint output depends on frozen, non-config inputs - the hardcoded 22050 Hz sample rate
-    /// and the ffmpeg extraction parameters - which the config-value hash can't see. Bump this when
-    /// any of them change so stored fingerprints are regenerated. Like <see cref="BlackFrame"/>,
-    /// fingerprint extraction is the expensive part, so the token is only mixed in once it moves
-    /// past the v1 baseline: introducing the mechanism must not, by itself, invalidate every
-    /// fingerprint in the library.
+    /// Fingerprint output depends on ffmpeg extraction details that are not config values. Bump
+    /// this when any of them change so stored fingerprints are regenerated. Like
+    /// <see cref="BlackFrameExtraction"/>, fingerprint extraction is the expensive part, so the
+    /// token is only mixed in once it moves past the v1 baseline: introducing the mechanism must
+    /// not, by itself, invalidate every fingerprint in the library.
     /// </para>
     /// </summary>
     private const int ChromaprintFingerprintAlgoVersion = 1;
+
+    /// <summary>
+    /// The sample rate every fingerprint in the wild was generated at, back when the setting was
+    /// not reachable from the configuration page. See <see cref="SampleRateFragment"/>.
+    /// </summary>
+    private const int DefaultChromaprintSampleRate = 22050;
 
     /// <summary>
     /// Hash of the config values that affect chromaprint fingerprint generation for the Intro region.
@@ -46,11 +55,11 @@ public static class ConfigHasher
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintIntro(PluginConfiguration config)
     {
-        // The frozen sample rate and ffmpeg extraction params aren't config values; they're tracked
-        // by ChromaprintFingerprintAlgoVersion rather than hashed explicitly.
+        ArgumentNullException.ThrowIfNull(config);
+
         var input = string.Create(
             CultureInfo.InvariantCulture,
-            $"cp-intro|iap={config.IntroAnalysisPercent}|cads={config.ChromaprintAnalysisDurationSeconds}");
+            $"cp-intro|iap={config.IntroAnalysisPercent}|cads={config.ChromaprintAnalysisDurationSeconds}{SampleRateFragment(config)}");
         return ComputeHash(WithFingerprintVersion(input));
     }
 
@@ -61,10 +70,30 @@ public static class ConfigHasher
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintCredits(PluginConfiguration config)
     {
+        ArgumentNullException.ThrowIfNull(config);
         var input = string.Create(
             CultureInfo.InvariantCulture,
-            $"cp-credits|cads={config.CreditsAnalysisDurationSeconds}|pad={config.ProbeAudioDuration}");
+            $"cp-credits|cads={config.CreditsAnalysisDurationSeconds}|pad={config.ProbeAudioDuration}{SampleRateFragment(config)}");
         return ComputeHash(WithFingerprintVersion(input));
+    }
+
+    /// <summary>
+    /// The sample-rate contribution to a fingerprint hash.
+    /// </summary>
+    /// <remarks>
+    /// The sample rate is a config value and it changes the fingerprint bit-for-bit, so omitting it
+    /// meant a rate change silently kept old fingerprints that were then compared against
+    /// newly-generated, incompatible ones. But it only became reachable from the UI now, and
+    /// mixing it into the hash unconditionally would invalidate every fingerprint on every
+    /// existing install - hours of ffmpeg - to record a value that has not actually changed on any
+    /// of them. So it contributes nothing while it sits at the historical default, exactly like
+    /// <see cref="WithFingerprintVersion"/> stays silent at its v1 baseline.
+    /// </remarks>
+    private static string SampleRateFragment(PluginConfiguration config)
+    {
+        return config.ChromaprintSampleRate == DefaultChromaprintSampleRate
+            ? string.Empty
+            : string.Create(CultureInfo.InvariantCulture, $"|sr={config.ChromaprintSampleRate}");
     }
 
     /// <summary>
@@ -75,19 +104,20 @@ public static class ConfigHasher
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintComparison(PluginConfiguration config)
     {
-        // The frozen chromaprint algorithm parameters (bit errors, time skip, index shift) and the
-        // code-level comparer behaviour aren't config values, so they can't be hashed directly -
-        // ChromaprintComparisonAlgoVersion stands in for them. Bump that constant on any matcher
-        // change that affects output.
+        ArgumentNullException.ThrowIfNull(config);
+
+        // The matcher tuning knobs (bit errors, time skip, index shift) ARE config values and they
+        // change which regions the comparer returns, so they are hashed explicitly. Only the
+        // code-level behaviour that no config value describes is delegated to
+        // ChromaprintComparisonAlgoVersion; bump that constant on any matcher change.
         // Min intro/outro also drive the comparer's min-match-duration now, so the intro/outro
         // mins in the hash already capture what ChromaprintMinMatchDurationSeconds used to.
         var input = string.Create(
             CultureInfo.InvariantCulture,
             $"cp-cmp|algo={ChromaprintComparisonAlgoVersion}|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}"
-            + $"|sr={config.EnableSilenceRefinement}|sdb={config.SilenceDetectNoisedB}|smd={config.SilenceDetectMinDurationSeconds}|ssi={config.SilenceSnapInwardSeconds}|sso={config.SilenceSnapOutwardSeconds}"
-            + $"|cs={config.EnableChapterSnapping}|csw={config.ChapterSnapWindowSeconds}"
-            + $"|ks={config.EnableKeyframeSnapping}|ksw={config.KeyframeSnapWindowSeconds}"
-            + $"|epi={config.EnablePreviewInference}|minP={config.MinPreviewDurationSeconds}|maxP={config.MaxPreviewDurationSeconds}");
+            + $"|mbe={config.ChromaprintMaxBitErrors}|mts={config.ChromaprintMaxTimeSkipSeconds}|iis={config.ChromaprintInvertedIndexShift}"
+            + $"|epi={config.EnablePreviewInference}|minP={config.MinPreviewDurationSeconds}|maxP={config.MaxPreviewDurationSeconds}"
+            + $"{RefinementFragment(config)}");
         return ComputeHash(input);
     }
 
@@ -112,21 +142,69 @@ public static class ConfigHasher
     }
 
     /// <summary>
-    /// Hash of the config values that affect black frame detection.
+    /// Hash of the config values that affect black-frame <em>sample extraction</em> - the
+    /// ffmpeg scan itself.
     /// <para>
-    /// Intentionally a constant. Black-frame sample extraction is the single most expensive
-    /// analysis step in the plugin - a single full-episode ffmpeg scan can run for minutes,
-    /// and invalidating the cache across a whole library because a knob moved by one is
-    /// prohibitively costly. We deliberately break the "hash covers everything that affects
-    /// output" contract here; the user-facing escape hatch is the <c>ReanalyzeBlackFrames</c>
-    /// toggle in the config page, which force-clears the cache on demand.
+    /// Intentionally a constant. Extraction is the single most expensive analysis step in the
+    /// plugin - a full-episode ffmpeg scan can run for minutes - and invalidating the cache
+    /// across a whole library because a knob moved by one is prohibitively costly. We
+    /// deliberately break the "hash covers everything that affects output" contract here; the
+    /// user-facing escape hatch is the <c>ReanalyzeBlackFrames</c> toggle in the config page,
+    /// which force-clears the cache on demand.
+    /// </para>
+    /// <para>
+    /// The knobs that only affect how cached samples are turned into segments live in
+    /// <see cref="BlackFrameSegments"/> instead: those are cheap to re-apply from cache, so
+    /// they get real staleness tracking.
     /// </para>
     /// </summary>
     /// <param name="config">The plugin configuration (unused by design - see remarks).</param>
     /// <returns>A 16-character hex hash string.</returns>
-    public static string BlackFrame(PluginConfiguration config)
+    public static string BlackFrameExtraction(PluginConfiguration config)
     {
         return ComputeHash("bf|v2");
+    }
+
+    /// <summary>
+    /// Hash of the config values that turn cached black-frame samples into segments: clustering
+    /// threshold, the intro/outro duration windows, preview inference, and the refinement
+    /// pipeline settings.
+    /// <para>
+    /// Segments are now persisted with their refined boundaries rather than being re-derived on
+    /// every query, so a change here has to invalidate the stored rows. Regenerating them only
+    /// needs the cached samples plus the refinement passes - no black-frame ffmpeg scan - which
+    /// is why this is tracked properly while <see cref="BlackFrameExtraction"/> is not.
+    /// </para>
+    /// </summary>
+    /// <param name="config">The plugin configuration.</param>
+    /// <returns>A 16-character hex hash string.</returns>
+    public static string BlackFrameSegments(PluginConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var input = string.Create(
+            CultureInfo.InvariantCulture,
+            $"bf-seg|mind={config.BlackFrameMinDurationMs}"
+            + $"|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}"
+            + $"|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}|maxMO={config.MaxMovieOutroDurationSeconds}"
+            + $"|iap={config.IntroAnalysisPercent}|oas={config.OutroAnalysisSeconds}"
+            + $"|epi={config.EnablePreviewInference}|minP={config.MinPreviewDurationSeconds}|maxP={config.MaxPreviewDurationSeconds}"
+            + $"{RefinementFragment(config)}");
+        return ComputeHash(input);
+    }
+
+    /// <summary>
+    /// The refinement-pipeline settings shared by every provider that snaps its boundaries.
+    /// Factored out so the black-frame and chromaprint hashes can never drift apart on the
+    /// half of the configuration they have in common.
+    /// </summary>
+    private static string RefinementFragment(PluginConfiguration config)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"|sr={config.EnableSilenceRefinement}|sdb={config.SilenceDetectNoisedB}|smd={config.SilenceDetectMinDurationSeconds}"
+            + $"|ssi={config.SilenceSnapInwardSeconds}|sso={config.SilenceSnapOutwardSeconds}"
+            + $"|cs={config.EnableChapterSnapping}|csw={config.ChapterSnapWindowSeconds}"
+            + $"|ks={config.EnableKeyframeSnapping}|ksw={config.KeyframeSnapWindowSeconds}");
     }
 
     /// <summary>

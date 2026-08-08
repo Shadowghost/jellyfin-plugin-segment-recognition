@@ -28,6 +28,24 @@ namespace Jellyfin.Plugin.SegmentRecognition.Providers;
 /// </summary>
 public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 {
+    /// <summary>
+    /// Maximum number of counterparts a single item is compared against.
+    /// <para>
+    /// Consensus needs several opinions but not every one: an exhaustive pairwise pass is
+    /// O(N²) per season and each comparison is a full Hamming scan, which on a large season with
+    /// no real match degenerates badly. A handful of counterparts is ample for a majority vote
+    /// and bounds the work at O(N).
+    /// </para>
+    /// </summary>
+    private const int MaxCounterpartsPerItem = 8;
+
+    /// <summary>
+    /// How far apart two candidate regions may start and still be treated as the same region.
+    /// Fingerprint points are ~0.124 s apart and encodes differ slightly between episodes, so
+    /// agreeing matches rarely land on exactly the same tick.
+    /// </summary>
+    private const long ConsensusToleranceTicks = 2 * TimeSpan.TicksPerSecond;
+
     private readonly FfmpegChromaprintService _chromaprintService;
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
@@ -226,6 +244,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 SeasonId = groupId,
                 FingerprintData = [],
                 AnalysisDurationSeconds = 0,
+                RegionStartTicks = 0,
                 ConfigHash = creditsHash,
                 CreatedAt = DateTime.UtcNow
             });
@@ -296,6 +315,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 SeasonId = groupId,
                 FingerprintData = [],
                 AnalysisDurationSeconds = 0,
+                RegionStartTicks = 0,
                 ConfigHash = configHash,
                 CreatedAt = DateTime.UtcNow
             });
@@ -311,6 +331,12 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             SeasonId = groupId,
             FingerprintData = fpData,
             AnalysisDurationSeconds = (int)analysisSeconds,
+
+            // Record where the fingerprint actually starts. Re-deriving this later from
+            // (runtime - AnalysisDurationSeconds) was wrong twice over: the credits region is
+            // anchored to the audio duration when ProbeAudioDuration is on, and the stored
+            // duration is truncated to whole seconds.
+            RegionStartTicks = (long)(startSeconds * TimeSpan.TicksPerSecond),
             ConfigHash = configHash,
             CreatedAt = DateTime.UtcNow
         });
@@ -391,20 +417,29 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        // Batch-load which items have chromaprint results (2 queries instead of 2N)
-        var itemsWithResults = (await db.ChapterAnalysisResults
-            .Where(r => allItemIds.Contains(r.ItemId)
-                && (r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro || r.MatchedChapterName == SegmentSourceNames.ChromaprintCredits))
-            .Select(r => r.ItemId)
-            .Distinct()
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false))
-            .ToHashSet();
+        // Batch-load which items have chromaprint results. Chunked by SQLite's parameter cap,
+        // which EF expands Contains() into one bind per id.
+        var itemsWithResults = new HashSet<Guid>();
+        var existingStatuses = new Dictionary<Guid, AnalysisStatus>();
+        foreach (var chunk in allItemIds.Chunk(500))
+        {
+            itemsWithResults.UnionWith(await db.ChapterAnalysisResults
+                .Where(r => chunk.Contains(r.ItemId)
+                    && (r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro || r.MatchedChapterName == SegmentSourceNames.ChromaprintCredits))
+                .Select(r => r.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false));
 
-        var existingStatuses = await db.AnalysisStatuses
-            .Where(s => allItemIds.Contains(s.ItemId) && s.ProviderName == Name)
-            .ToDictionaryAsync(s => s.ItemId, cancellationToken)
-            .ConfigureAwait(false);
+            var statuses = await db.AnalysisStatuses
+                .Where(s => chunk.Contains(s.ItemId) && s.ProviderName == Name)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var status in statuses)
+            {
+                existingStatuses[status.ItemId] = status;
+            }
+        }
 
         var currentComparisonHash = ConfigHasher.ChromaprintComparison(config);
 
@@ -433,9 +468,14 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        var matchCount = await db.AnalysisStatuses
-            .CountAsync(s => allItemIds.Contains(s.ItemId) && s.ProviderName == Name && s.HasResults, cancellationToken)
-            .ConfigureAwait(false);
+        var matchCount = 0;
+        foreach (var chunk in allItemIds.Chunk(500))
+        {
+            matchCount += await db.AnalysisStatuses
+                .CountAsync(s => chunk.Contains(s.ItemId) && s.ProviderName == Name && s.HasResults, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         _logger.LogDebug(
             "Chromaprint: group {GroupId} analysis complete - {Matches} items with matches out of {Total} fingerprinted",
             groupId,
@@ -524,9 +564,25 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            MediaSegmentDto? bestMatch = null;
+            // The offset of the fingerprint within the file. Stored explicitly since the credits
+            // region is anchored to the audio duration, which can be shorter than the container
+            // runtime. Rows written before that column existed carry 0; for credits that is not a
+            // possible real value (a credits fingerprint never starts at 0 - short media is
+            // fingerprinted whole under the Intro region), so fall back to the old derivation.
+            var regionOffsetTicks = current.RegionStartTicks;
+            if (isCredits && regionOffsetTicks == 0)
+            {
+                regionOffsetTicks = Math.Max(0, runtimeTicks - (current.AnalysisDurationSeconds * TimeSpan.TicksPerSecond));
+            }
 
-            for (int j = 0; j < fingerprints.Count; j++)
+            // Collect one candidate region per counterpart, then take the position that the most
+            // counterparts agree on. Accepting the first counterpart that happened to produce an
+            // in-window region made the result depend on row order and let a single spurious
+            // pairing define the segment for the whole item.
+            var candidates = new List<(long StartTicks, long EndTicks)>();
+            var counterpartsCompared = 0;
+
+            for (int j = 0; j < fingerprints.Count && counterpartsCompared < MaxCounterpartsPerItem; j++)
             {
                 if (i == j)
                 {
@@ -541,6 +597,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                     continue;
                 }
 
+                counterpartsCompared++;
+
                 var matchedRegions = FingerprintComparer.FindMatchedRegions(
                     current.FingerprintData,
                     other.FingerprintData,
@@ -553,60 +611,53 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 foreach (var (startTicks, endTicks) in matchedRegions)
                 {
                     var durationSeconds = (endTicks - startTicks) / (double)TimeSpan.TicksPerSecond;
+                    var absStart = regionOffsetTicks + startTicks;
+                    var absEnd = regionOffsetTicks + endTicks;
 
                     if (isCredits)
                     {
-                        if (durationSeconds < config.MinOutroDurationSeconds || durationSeconds > config.MaxOutroDurationSeconds)
+                        if (durationSeconds < config.MinOutroDurationSeconds
+                            || durationSeconds > config.MaxOutroDurationSeconds)
                         {
                             continue;
                         }
 
-                        // For credits, compute absolute position: the fingerprint starts at (runtime - analysisDuration)
-                        var offsetTicks = Math.Max(0, runtimeTicks - (current.AnalysisDurationSeconds * TimeSpan.TicksPerSecond));
-                        var absStart = offsetTicks + startTicks;
-                        var absEnd = offsetTicks + endTicks;
-
-                        // Credits should be in the second half of the file
-                        if (absStart > runtimeTicks / 2)
+                        // Credits should be in the second half of the file.
+                        if (absStart <= runtimeTicks / 2)
                         {
-                            bestMatch = new MediaSegmentDto
-                            {
-                                ItemId = current.ItemId,
-                                Type = MediaSegmentType.Outro,
-                                StartTicks = absStart,
-                                EndTicks = absEnd
-                            };
-
-                            break;
+                            continue;
                         }
                     }
                     else
                     {
-                        if (durationSeconds < config.MinIntroDurationSeconds || durationSeconds > config.MaxIntroDurationSeconds)
+                        if (durationSeconds < config.MinIntroDurationSeconds
+                            || durationSeconds > config.MaxIntroDurationSeconds)
                         {
                             continue;
                         }
 
-                        if (startTicks < runtimeTicks / 2)
+                        if (absStart >= runtimeTicks / 2)
                         {
-                            bestMatch = new MediaSegmentDto
-                            {
-                                ItemId = current.ItemId,
-                                Type = MediaSegmentType.Intro,
-                                StartTicks = startTicks,
-                                EndTicks = endTicks
-                            };
-
-                            break;
+                            continue;
                         }
                     }
-                }
 
-                if (bestMatch is not null)
-                {
+                    // One vote per counterpart: the best (longest) in-window region it produced.
+                    candidates.Add((absStart, absEnd));
                     break;
                 }
             }
+
+            var consensus = SelectConsensusRegion(candidates, counterpartsCompared);
+            var bestMatch = consensus is null
+                ? null
+                : new MediaSegmentDto
+                {
+                    ItemId = current.ItemId,
+                    Type = segmentType,
+                    StartTicks = consensus.Value.StartTicks,
+                    EndTicks = consensus.Value.EndTicks
+                };
 
             if (hasExisting)
             {
@@ -725,6 +776,81 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Picks the region that the most counterparts agree on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Candidates are clustered by start position within <see cref="ConsensusToleranceTicks"/>
+    /// and the largest cluster wins, represented by its median start and end so one outlier
+    /// inside an otherwise-agreeing cluster cannot stretch the boundary.
+    /// </para>
+    /// <para>
+    /// When there are at least two comparable counterparts a region must be corroborated by two
+    /// of them; a single agreeing counterpart is accepted only when that is all there is (a
+    /// two-episode season). This is what stops one spurious pairing from defining an item's
+    /// intro. Ties are broken by earliest start so the result never depends on row order.
+    /// </para>
+    /// </remarks>
+    /// <param name="candidates">One candidate region per counterpart, in absolute ticks.</param>
+    /// <param name="counterpartsCompared">How many counterparts were actually compared.</param>
+    /// <returns>The agreed region, or <c>null</c> when nothing reaches the required support.</returns>
+    internal static (long StartTicks, long EndTicks)? SelectConsensusRegion(
+        IReadOnlyList<(long StartTicks, long EndTicks)> candidates,
+        int counterpartsCompared)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var requiredVotes = counterpartsCompared >= 2 ? 2 : 1;
+        if (candidates.Count < requiredVotes)
+        {
+            return null;
+        }
+
+        var ordered = candidates.OrderBy(c => c.StartTicks).ThenBy(c => c.EndTicks).ToList();
+
+        List<(long StartTicks, long EndTicks)>? best = null;
+        var current = new List<(long StartTicks, long EndTicks)> { ordered[0] };
+
+        for (int i = 1; i <= ordered.Count; i++)
+        {
+            if (i < ordered.Count && ordered[i].StartTicks - current[0].StartTicks <= ConsensusToleranceTicks)
+            {
+                current.Add(ordered[i]);
+                continue;
+            }
+
+            // Strictly greater keeps the earliest cluster on a tie, which makes the choice
+            // independent of enumeration order.
+            if (best is null || current.Count > best.Count)
+            {
+                best = current;
+            }
+
+            if (i < ordered.Count)
+            {
+                current = [ordered[i]];
+            }
+        }
+
+        if (best is null || best.Count < requiredVotes)
+        {
+            return null;
+        }
+
+        return (Median(best.Select(c => c.StartTicks)), Median(best.Select(c => c.EndTicks)));
+    }
+
+    private static long Median(IEnumerable<long> values)
+    {
+        var sorted = values.OrderBy(v => v).ToList();
+        return sorted[sorted.Count / 2];
     }
 
     /// <summary>

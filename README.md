@@ -8,10 +8,10 @@ A Jellyfin plugin that automatically detects and manages media segments (intros,
 - **Black Frame Detection** -- Detects black frame clusters at intro/outro boundaries using ffmpeg. Hardware-accelerated decoding with GPU-side downscaling (480p default). Automatic letterbox crop detection. Supports episodes and movies.
 - **Chromaprint Audio Fingerprinting** -- Compares audio fingerprints across episodes in a season to find shared intro and credits sequences. Separate intro and credits region fingerprinting.
 - **Preview Inference** -- Optionally detects preview/next-episode teasers after credits.
-- **Boundary Refinement** -- Snaps detected boundaries to silence gaps (asymmetric windows), chapter markers, and video keyframes for clean skip transitions.
-- **Config Staleness Detection** -- Results store a hash of the configuration that produced them. Stale results are automatically regenerated when settings change.
+- **Boundary Refinement** -- Snaps detected boundaries to silence gaps (asymmetric windows), chapter markers, and video keyframes for clean skip transitions. Refined boundaries are what gets stored and served.
+- **Config Staleness Detection** -- Both results and analysis status store a hash of the configuration that produced them, so items that matched *nothing* are re-analyzed too when settings change. Black-frame analysis splits this in two: changing a clustering threshold or duration window replays from the cached samples, while re-extracting samples (the expensive part) stays behind the explicit `Re-analyze Black Frames` toggle.
 - **Incremental Processing** -- Only analyzes new items and pushes segments for items with new results.
-- **EDL Export/Import** -- Exports segments as Kodi/MPlayer-compatible `.edl` sidecar files. Imports `.edl` files with support for standard 3-column and an extended format with segment type names for lossless round-trips.
+- **EDL Export/Import** -- Exports segments as Kodi/MPlayer-compatible `.edl` sidecar files. Imports `.edl` files with support for standard 3-column and an extended format with segment type names for lossless round-trips. Exported files carry a generated-by marker so they are never re-imported as a second provider's results, and sidecars the plugin did not write are never overwritten or deleted.
 - **Intro Skipper Import** -- One-time migration from the intro-skipper plugin database.
 
 ## How It Works
@@ -50,21 +50,21 @@ Access from **Dashboard > Plugins > Segment Recognition**.
 
 **Duration Limits** -- Min/max intro (15-120s), min/max outro (15-600s), max movie outro (900s).
 
-**Black Frame** -- Analysis resolution (480p/720p/native), re-analyze flag, automatic letterbox detection.
+**Black Frame** -- Analysis resolution (480p/720p/native), black threshold (90%), minimum cluster duration (500ms), re-analyze flag, automatic letterbox detection.
 
 **Analysis Regions** -- Intro region (25% from start), outro region (240s from end).
 
 **Refinement** -- Silence snapping (noise floor, min duration, asymmetric windows), chapter snapping (5.0s window), keyframe snapping (3.0s window). All enabled by default.
 
-**Chromaprint** -- Max analysis duration (600s), min match duration (15s).
+**Chromaprint** -- Max analysis duration (600s), sample rate (22050 Hz), max bit errors (6), max time skip (3.5s), index fuzz (2). Minimum match length comes from the intro/outro duration minimums.
 
 **Chapter Names** -- Configurable name lists per segment type with word-boundary matching.
 
 ## Data Storage
 
-Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite):
-- `AnalysisStatuses` -- Which items have been analyzed by which provider
-- `ChapterAnalysisResults` -- Segments from chapter matching, chromaprint, and EDL import
+Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite, WAL mode):
+- `AnalysisStatuses` -- Which items have been analyzed by which provider, and under which config
+- `ChapterAnalysisResults` -- Segments from chapter matching, black frames, chromaprint, and EDL import, tagged by source
 - `BlackFrameResults` / `CropDetectResults` -- Raw black frame and crop data
 - `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions)
 

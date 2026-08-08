@@ -3,11 +3,16 @@ using System;
 namespace Jellyfin.Plugin.SegmentRecognition.Data.Entities;
 
 /// <summary>
-/// Stores a segment derived from chapter name matching or chromaprint analysis.
-/// Compound key: (ItemId, SegmentType, MatchedChapterName).
+/// Stores a segment derived from chapter name matching, black-frame clustering,
+/// chromaprint analysis, or EDL import.
 /// </summary>
 public class ChapterAnalysisResult
 {
+    /// <summary>
+    /// Gets or sets the surrogate primary key.
+    /// </summary>
+    public int Id { get; set; }
+
     /// <summary>
     /// Gets or sets the item identifier.
     /// </summary>

@@ -54,7 +54,7 @@ public partial class FfmpegBlackFrameService
     /// <param name="videoCodec">The video codec name (e.g. "h264", "hevc") for hardware acceleration eligibility.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Crop rectangle (width, height, x, y) or null if no letterboxing detected.</returns>
-    public async Task<(int Width, int Height, int X, int Y)?> DetectCropAsync(
+    public virtual async Task<(int Width, int Height, int X, int Y)?> DetectCropAsync(
         string filePath,
         double runtimeSeconds,
         string? videoCodec,
@@ -145,7 +145,7 @@ public partial class FfmpegBlackFrameService
     /// <param name="videoCodec">The video codec name (e.g. "h264", "hevc") for hardware acceleration eligibility.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of detected black frames with timestamp and black percentage.</returns>
-    public async Task<List<(long TimestampTicks, double BlackPercentage)>> DetectBlackFramesAsync(
+    public virtual async Task<List<(long TimestampTicks, double BlackPercentage)>> DetectBlackFramesAsync(
         string filePath,
         double threshold,
         double startSeconds,

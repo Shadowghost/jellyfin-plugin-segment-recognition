@@ -34,6 +34,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             {
                 DataSource = dbPath,
                 DefaultTimeout = 60,
+
+                // Analysis writes from several workers in parallel while providers read on the
+                // playback path. Pooling keeps those connections cheap, and the 60s timeout makes
+                // Microsoft.Data.Sqlite retry on SQLITE_BUSY rather than surfacing it immediately.
+                // WAL is enabled once on the file itself by DatabaseInitializer.
+                Pooling = true,
+                Cache = SqliteCacheMode.Shared,
             }.ToString();
 
             options.UseSqlite(connectionString);

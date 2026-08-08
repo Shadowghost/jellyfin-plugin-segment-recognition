@@ -96,32 +96,30 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
                 return [];
             }
 
-            var segments = await BuildSegmentsFromCachedFrames(db, request.ItemId, cancellationToken).ConfigureAwait(false);
-
-            // Also serve any preview segments inferred from the outro boundary
-            var preview = await db.ChapterAnalysisResults
+            // Serve the boundaries that analysis actually settled on.
+            var stored = await db.ChapterAnalysisResults
                 .AsNoTracking()
-                .FirstOrDefaultAsync(
-                    r => r.ItemId == request.ItemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview,
-                    cancellationToken)
+                .Where(r => r.ItemId == request.ItemId
+                    && SegmentSourceNames.BlackFrameOwned.Contains(r.MatchedChapterName))
+                .OrderBy(r => r.StartTicks)
+                .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (preview is not null)
+            if (stored.Count > 0)
             {
-                var list = new List<MediaSegmentDto>(segments)
+                return stored.Select(r => new MediaSegmentDto
                 {
-                    new MediaSegmentDto
-                    {
-                        ItemId = preview.ItemId,
-                        Type = (MediaSegmentType)preview.SegmentType,
-                        StartTicks = preview.StartTicks,
-                        EndTicks = preview.EndTicks
-                    }
-                };
-                return list;
+                    ItemId = r.ItemId,
+                    Type = (MediaSegmentType)r.SegmentType,
+                    StartTicks = r.StartTicks,
+                    EndTicks = r.EndTicks
+                }).ToList();
             }
 
-            return segments;
+            // Fallback for rows written before refined boundaries were persisted: re-cluster the
+            // cached samples so an upgraded install keeps serving segments until the next
+            // analysis run replaces them with refined ones.
+            return await BuildSegmentsFromCachedFrames(db, request.ItemId, cancellationToken).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)
         {
@@ -143,25 +141,32 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         if (item?.Path is null || (item.RunTimeTicks ?? 0) <= 0)
         {
             using var dbEmpty = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-            dbEmpty.AnalysisStatuses.Add(new AnalysisStatus
-            {
-                ItemId = itemId,
-                ProviderName = Name,
-                AnalyzedAt = DateTime.UtcNow,
-                HasResults = false
-            });
+            await AnalysisStatusWriter.UpsertAsync(
+                dbEmpty,
+                itemId,
+                Name,
+                hasResults: false,
+                ConfigHasher.BlackFrameSegments(Plugin.Instance?.Configuration ?? new PluginConfiguration()),
+                cancellationToken).ConfigureAwait(false);
 
             await dbEmpty.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
-        var configHash = ConfigHasher.BlackFrame(config);
-        var runtimeTicks = item.RunTimeTicks!.Value;
-        var runtimeSeconds = runtimeTicks / (double)TimeSpan.TicksPerSecond;
+        var extractionHash = ConfigHasher.BlackFrameExtraction(config);
+        var runtimeSeconds = item.RunTimeTicks!.Value / (double)TimeSpan.TicksPerSecond;
 
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        var segments = new List<MediaSegmentDto>();
+        var nowUtc = DateTime.UtcNow;
+
+        // Re-analysis must be idempotent: a recalculation with clearCache=false reaches here
+        // without a preceding cleanup, and the frame rows below would otherwise collide on
+        // their (ItemId, TimestampTicks) key.
+        await db.BlackFrameResults
+            .Where(r => r.ItemId == itemId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
 
         // Get the video stream for hardware acceleration eligibility and resolution
         var videoStream = _mediaSourceManager.GetMediaStreams(itemId)
@@ -175,26 +180,14 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         var cropTime = sw.Elapsed;
 
         // Scan intro region
-        var introScanSeconds = Math.Min(runtimeSeconds * config.IntroAnalysisPercent, config.MaxIntroDurationSeconds * 2.0);
+        var introScanSeconds = IntroScanSeconds(runtimeSeconds, config);
         sw.Restart();
         var introFrames = await _blackFrameService.DetectBlackFramesAsync(
             item.Path, config.BlackFrameThreshold, 0, introScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
         var introTime = sw.Elapsed;
 
-        var introClusters = ClusterFrames(introFrames, config.BlackFrameMinDurationMs * TimeSpan.TicksPerMillisecond);
-        var introSegment = FindBestIntroCluster(itemId, introClusters, runtimeTicks, config);
-        if (introSegment is not null)
-        {
-            var (refinedStart, refinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, introSegment.StartTicks, introSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
-
-            introSegment.StartTicks = refinedStart;
-            introSegment.EndTicks = refinedEnd;
-            segments.Add(introSegment);
-        }
-
         // Scan outro region
-        var outroStartSeconds = Math.Max(0, runtimeSeconds - config.OutroAnalysisSeconds);
+        var outroStartSeconds = OutroScanStartSeconds(runtimeSeconds, config);
         var outroScanSeconds = runtimeSeconds - outroStartSeconds;
         sw.Restart();
         var outroFrames = await _blackFrameService.DetectBlackFramesAsync(
@@ -205,7 +198,6 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         // and intro/outro scan regions can overlap for short files).
         var seenTimestamps = new HashSet<long>();
         var frameRows = new List<BlackFrameResult>(introFrames.Count + outroFrames.Count);
-        var nowUtc = DateTime.UtcNow;
         foreach (var (timestampTicks, blackPercentage) in introFrames.Concat(outroFrames))
         {
             if (seenTimestamps.Add(timestampTicks))
@@ -215,7 +207,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
                     ItemId = itemId,
                     TimestampTicks = timestampTicks,
                     BlackPercentage = blackPercentage,
-                    ConfigHash = configHash,
+                    ConfigHash = extractionHash,
                     CreatedAt = nowUtc
                 });
             }
@@ -226,56 +218,14 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             db.BlackFrameResults.AddRange(frameRows);
         }
 
-        var outroClusters = ClusterFrames(outroFrames, config.BlackFrameMinDurationMs * TimeSpan.TicksPerMillisecond);
-        var outroSegment = FindBestOutroCluster(itemId, outroClusters, runtimeTicks, config, item is Movie);
-        if (outroSegment is not null)
-        {
-            var (outroRefinedStart, outroRefinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, outroSegment.StartTicks, outroSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
-
-            outroSegment.StartTicks = outroRefinedStart;
-            outroSegment.EndTicks = outroRefinedEnd;
-            segments.Add(outroSegment);
-
-            // If the outro ends before the episode's runtime, the remaining portion
-            // is likely a preview/next-episode teaser (max 30s)
-            if (config.EnablePreviewInference && outroRefinedEnd < runtimeTicks)
-            {
-                var previewDurationSeconds = (runtimeTicks - outroRefinedEnd) / (double)TimeSpan.TicksPerSecond;
-                if (previewDurationSeconds <= 30.0)
-                {
-                    _logger.LogDebug(
-                        "Detected {Duration:F1}s preview after outro for \"{ItemName}\"",
-                        previewDurationSeconds,
-                        item.Name);
-
-                    db.ChapterAnalysisResults.Add(new ChapterAnalysisResult
-                    {
-                        ItemId = itemId,
-                        SegmentType = (int)MediaSegmentType.Preview,
-                        StartTicks = outroRefinedEnd,
-                        EndTicks = runtimeTicks,
-                        MatchedChapterName = SegmentSourceNames.BlackFramePreview,
-                        ConfigHash = configHash,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                }
-            }
-        }
-
-        db.AnalysisStatuses.Add(new AnalysisStatus
-        {
-            ItemId = itemId,
-            ProviderName = Name,
-            AnalyzedAt = DateTime.UtcNow,
-            HasResults = segments.Count > 0
-        });
+        var segmentCount = await BuildAndPersistSegmentsAsync(
+            db, item, config, introFrames, outroFrames, videoCodec, nowUtc, cancellationToken).ConfigureAwait(false);
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug(
             "BlackFrame: found {SegmentCount} segments for \"{ItemName}\" ({Path}) - {IntroFrames} intro frames, {OutroFrames} outro frames (crop={CropMs}ms, intro={IntroMs}ms/{IntroScan:F0}s, outro={OutroMs}ms/{OutroScan:F0}s)",
-            segments.Count,
+            segmentCount,
             item.Name,
             item.Path,
             introFrames.Count,
@@ -285,6 +235,209 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             introScanSeconds,
             (long)outroTime.TotalMilliseconds,
             outroScanSeconds);
+    }
+
+    /// <summary>
+    /// Recomputes the item's segments from already-cached black-frame samples, without re-running
+    /// the (expensive) ffmpeg scan.
+    /// </summary>
+    /// <remarks>
+    /// The clustering thresholds and duration windows are cheap to re-apply but the extraction is
+    /// not, so they are tracked by a separate config hash. When only the cheap half changed, the
+    /// scheduled task calls this instead of <see cref="AnalyzeAsync"/>. This preserves the
+    /// "tweak a threshold and see it take effect" behaviour that the old serve-time re-clustering
+    /// provided, while still letting refined boundaries be the thing that gets served.
+    /// </remarks>
+    /// <param name="itemId">The item identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task RebuildSegmentsFromCacheAsync(Guid itemId, CancellationToken cancellationToken)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+        if (item?.Path is null || (item.RunTimeTicks ?? 0) <= 0)
+        {
+            return;
+        }
+
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var runtimeSeconds = item.RunTimeTicks!.Value / (double)TimeSpan.TicksPerSecond;
+
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        var frames = await db.BlackFrameResults
+            .AsNoTracking()
+            .Where(r => r.ItemId == itemId)
+            .OrderBy(r => r.TimestampTicks)
+            .Select(r => new { r.TimestampTicks, r.BlackPercentage })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // Partition the cached samples back into the two scan windows the extraction used, so
+        // clustering sees exactly what it would have seen during a full run. The windows can
+        // overlap on short files - as they do during extraction - so a frame may appear in both.
+        var introCutoffTicks = (long)(IntroScanSeconds(runtimeSeconds, config) * TimeSpan.TicksPerSecond);
+        var outroStartTicks = (long)(OutroScanStartSeconds(runtimeSeconds, config) * TimeSpan.TicksPerSecond);
+
+        var introFrames = frames.Where(f => f.TimestampTicks <= introCutoffTicks)
+            .Select(f => (f.TimestampTicks, f.BlackPercentage)).ToList();
+        var outroFrames = frames.Where(f => f.TimestampTicks >= outroStartTicks)
+            .Select(f => (f.TimestampTicks, f.BlackPercentage)).ToList();
+
+        var videoCodec = _mediaSourceManager.GetMediaStreams(itemId)
+            .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.Codec;
+
+        var segmentCount = await BuildAndPersistSegmentsAsync(
+            db, item, config, introFrames, outroFrames, videoCodec, DateTime.UtcNow, cancellationToken).ConfigureAwait(false);
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        _logger.LogDebug(
+            "BlackFrame: rebuilt {SegmentCount} segments from {FrameCount} cached frames for \"{ItemName}\"",
+            segmentCount,
+            frames.Count,
+            item.Name);
+    }
+
+    /// <summary>
+    /// Clusters the given frames, selects the best intro/outro, refines the boundaries, and stages
+    /// the resulting rows plus the analysis status on the context. Does not save.
+    /// </summary>
+    /// <returns>The number of segment rows staged.</returns>
+    private async Task<int> BuildAndPersistSegmentsAsync(
+        SegmentDbContext db,
+        BaseItem item,
+        PluginConfiguration config,
+        List<(long TimestampTicks, double BlackPercentage)> introFrames,
+        List<(long TimestampTicks, double BlackPercentage)> outroFrames,
+        string? videoCodec,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var itemId = item.Id;
+        var runtimeTicks = item.RunTimeTicks!.Value;
+        var segmentHash = ConfigHasher.BlackFrameSegments(config);
+        var segments = new List<ChapterAnalysisResult>();
+
+        // Clear prior rows so both a re-analysis and a cache rebuild are idempotent against the
+        // unique (ItemId, SegmentType, MatchedChapterName, StartTicks) index.
+        await db.ChapterAnalysisResults
+            .Where(r => r.ItemId == itemId
+                && SegmentSourceNames.BlackFrameOwned.Contains(r.MatchedChapterName))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var minClusterTicks = config.BlackFrameMinDurationMs * TimeSpan.TicksPerMillisecond;
+
+        var introSegment = FindBestIntroCluster(itemId, ClusterFrames(introFrames, minClusterTicks), config);
+        if (introSegment is not null)
+        {
+            var (refinedStart, refinedEnd) = await _refinementPipeline.RefineAsync(
+                itemId, introSegment.StartTicks, introSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+
+            segments.Add(new ChapterAnalysisResult
+            {
+                ItemId = itemId,
+                SegmentType = (int)MediaSegmentType.Intro,
+                StartTicks = refinedStart,
+                EndTicks = refinedEnd,
+                MatchedChapterName = SegmentSourceNames.BlackFrameIntro,
+                ConfigHash = segmentHash,
+                CreatedAt = nowUtc
+            });
+        }
+
+        var outroSegment = FindBestOutroCluster(itemId, ClusterFrames(outroFrames, minClusterTicks), runtimeTicks, config, item is Movie);
+        if (outroSegment is not null)
+        {
+            var (outroRefinedStart, outroRefinedEnd) = await _refinementPipeline.RefineAsync(
+                itemId, outroSegment.StartTicks, outroSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+
+            // A trailing gap shorter than MinPreviewDurationSeconds is black/silence before EOF
+            // rather than a teaser; absorb it so the outro runs to the end instead of leaving a
+            // misleading one-second Preview. Mirrors ChromaprintProvider's handling.
+            if (config.EnablePreviewInference
+                && outroRefinedEnd < runtimeTicks
+                && (runtimeTicks - outroRefinedEnd) / (double)TimeSpan.TicksPerSecond < config.MinPreviewDurationSeconds)
+            {
+                outroRefinedEnd = runtimeTicks;
+            }
+
+            segments.Add(new ChapterAnalysisResult
+            {
+                ItemId = itemId,
+                SegmentType = (int)MediaSegmentType.Outro,
+                StartTicks = outroRefinedStart,
+                EndTicks = outroRefinedEnd,
+                MatchedChapterName = SegmentSourceNames.BlackFrameOutro,
+                ConfigHash = segmentHash,
+                CreatedAt = nowUtc
+            });
+
+            // Anything left after the refined outro end is a preview/next-episode teaser, up to
+            // the configured cap (beyond that it is more likely a post-credits scene). This is
+            // anchored to the same refined end the outro row uses, so the two never disagree.
+            if (config.EnablePreviewInference && outroRefinedEnd < runtimeTicks)
+            {
+                var previewDurationSeconds = (runtimeTicks - outroRefinedEnd) / (double)TimeSpan.TicksPerSecond;
+                if (previewDurationSeconds <= config.MaxPreviewDurationSeconds)
+                {
+                    _logger.LogDebug(
+                        "Detected {Duration:F1}s preview after outro for \"{ItemName}\"",
+                        previewDurationSeconds,
+                        item.Name);
+
+                    segments.Add(new ChapterAnalysisResult
+                    {
+                        ItemId = itemId,
+                        SegmentType = (int)MediaSegmentType.Preview,
+                        StartTicks = outroRefinedEnd,
+                        EndTicks = runtimeTicks,
+                        MatchedChapterName = SegmentSourceNames.BlackFramePreview,
+                        ConfigHash = segmentHash,
+                        CreatedAt = nowUtc
+                    });
+                }
+            }
+        }
+
+        // Persist the refined boundaries. These - not the raw frame samples - are what
+        // GetMediaSegments serves, so every silence/chapter/keyframe adjustment computed above
+        // actually reaches the player.
+        db.ChapterAnalysisResults.AddRange(segments);
+
+        await AnalysisStatusWriter.UpsertAsync(
+            db,
+            itemId,
+            Name,
+            segments.Count > 0,
+            segmentHash,
+            cancellationToken).ConfigureAwait(false);
+
+        return segments.Count;
+    }
+
+    /// <summary>
+    /// Length of the leading region scanned for intro black frames, in seconds.
+    /// </summary>
+    /// <param name="runtimeSeconds">The item runtime in seconds.</param>
+    /// <param name="config">The plugin configuration.</param>
+    /// <returns>The scan length in seconds.</returns>
+    internal static double IntroScanSeconds(double runtimeSeconds, PluginConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        return Math.Min(runtimeSeconds * config.IntroAnalysisPercent, config.MaxIntroDurationSeconds * 2.0);
+    }
+
+    /// <summary>
+    /// Start of the trailing region scanned for outro black frames, in seconds.
+    /// </summary>
+    /// <param name="runtimeSeconds">The item runtime in seconds.</param>
+    /// <param name="config">The plugin configuration.</param>
+    /// <returns>The scan start offset in seconds.</returns>
+    internal static double OutroScanStartSeconds(double runtimeSeconds, PluginConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        return Math.Max(0, runtimeSeconds - config.OutroAnalysisSeconds);
     }
 
     /// <summary>
@@ -311,7 +464,8 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
         await db.ChapterAnalysisResults
-            .Where(r => r.ItemId == itemId && r.MatchedChapterName == SegmentSourceNames.BlackFramePreview)
+            .Where(r => r.ItemId == itemId
+                && SegmentSourceNames.BlackFrameOwned.Contains(r.MatchedChapterName))
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
         await db.AnalysisStatuses
@@ -367,7 +521,6 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
     internal static MediaSegmentDto? FindBestIntroCluster(
         Guid itemId,
         List<(long Start, long End)> clusters,
-        long runtimeTicks,
         PluginConfiguration config)
     {
         var maxIntroTicks = config.MaxIntroDurationSeconds * TimeSpan.TicksPerSecond;
@@ -459,7 +612,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
 
         var segments = new List<MediaSegmentDto>();
 
-        var introSegment = FindBestIntroCluster(itemId, allClusters, runtimeTicks, config);
+        var introSegment = FindBestIntroCluster(itemId, allClusters, config);
         if (introSegment is not null)
         {
             segments.Add(introSegment);

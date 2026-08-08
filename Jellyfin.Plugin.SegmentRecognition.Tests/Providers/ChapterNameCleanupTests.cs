@@ -15,6 +15,8 @@ public sealed class ChapterNameCleanupTests
     [InlineData("chromaprint")]
     [InlineData("chromaprint-credits")]
     [InlineData("chromaprint-preview")]
+    [InlineData("blackframe-intro")]
+    [InlineData("blackframe-outro")]
     [InlineData("blackframe-preview")]
     [InlineData("edl-import")]
     [InlineData("intro-skipper import")]
@@ -40,7 +42,35 @@ public sealed class ChapterNameCleanupTests
     public void ForeignSentinels_HasExpectedCount()
     {
         // Bump this when a new sentinel is introduced; the test flags forgotten updates.
-        Assert.Equal(6, ChapterNameProvider.ForeignSentinels.Length);
+        Assert.Equal(8, ChapterNameProvider.ForeignSentinels.Length);
+    }
+
+    /// <summary>
+    /// The cleanup filter and the serve filter must agree. When they drifted, black-frame preview
+    /// and intro-skipper rows were excluded from cleanup but not from ChapterNameProvider's query,
+    /// so two providers served the same segment.
+    /// </summary>
+    [Fact]
+    public void ForeignSentinels_IsTheSharedList()
+    {
+        Assert.Same(SegmentSourceNames.ForeignToChapterName, ChapterNameProvider.ForeignSentinels);
+    }
+
+    [Fact]
+    public void ForeignSentinels_CoversEveryProviderOwnedSentinel()
+    {
+        foreach (var owned in SegmentSourceNames.BlackFrameOwned.Concat(SegmentSourceNames.ChromaprintOwned))
+        {
+            Assert.Contains(owned, ChapterNameProvider.ForeignSentinels);
+        }
+    }
+
+    [Fact]
+    public void ForeignSentinels_HasNoDuplicates()
+    {
+        Assert.Equal(
+            ChapterNameProvider.ForeignSentinels.Length,
+            ChapterNameProvider.ForeignSentinels.Distinct().Count());
     }
 
     [Fact]

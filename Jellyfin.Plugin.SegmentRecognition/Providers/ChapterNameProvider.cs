@@ -8,7 +8,6 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Data;
 using Jellyfin.Plugin.SegmentRecognition.Data.Entities;
-using Jellyfin.Plugin.SegmentRecognition.ScheduledTasks;
 using Jellyfin.Plugin.SegmentRecognition.Services;
 using MediaBrowser.Controller.Chapters;
 using MediaBrowser.Controller.Entities;
@@ -30,18 +29,9 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
 {
     /// <summary>
     /// MatchedChapterName sentinel values owned by other providers. These must be preserved
-    /// when ChapterNameProvider cleans up its own rows. Array form is used so EF Core
-    /// can translate the Contains call into a SQL <c>IN</c> clause.
+    /// when ChapterNameProvider cleans up its own rows, and excluded when it serves them.
     /// </summary>
-    internal static readonly string[] ForeignSentinels =
-    [
-        SegmentSourceNames.ChromaprintIntro,
-        SegmentSourceNames.ChromaprintCredits,
-        SegmentSourceNames.ChromaprintPreview,
-        SegmentSourceNames.BlackFramePreview,
-        EdlImportProvider.MatchedName,
-        ImportIntroSkipperDataTask.MatchedName,
-    ];
+    internal static readonly string[] ForeignSentinels = SegmentSourceNames.ForeignToChapterName;
 
     /// <summary>
     /// Characters that may precede a chapter keyword and still count as a word boundary:
@@ -158,13 +148,13 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
                 return [];
             }
 
+            // Exclude every sentinel owned by a sibling provider. This must stay identical to
+            // the filter CleanupExtractedData uses, or rows get served by two providers at once
+            // (or deleted by a provider that doesn't own them).
             var cached = await db.ChapterAnalysisResults
                 .AsNoTracking()
                 .Where(r => r.ItemId == request.ItemId
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
-                    && r.MatchedChapterName != EdlImportProvider.MatchedName)
+                    && !ForeignSentinels.Contains(r.MatchedChapterName))
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
@@ -198,14 +188,23 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         var configHash = ConfigHasher.ChapterName(config);
         var item = _libraryManager.GetItemById(itemId);
         var isMovie = item is Movie;
+        var runtimeTicks = item?.RunTimeTicks ?? 0;
         var chapters = _chapterManager.GetChapters(itemId);
 
-        // Key is (SegmentType, MatchedChapterName). We allow the same SegmentType to appear
-        // more than once per item - e.g. Intro → Commercial → Intro is a valid chapter
-        // arrangement, and ad breaks recur per episode. The (type, name) compound key
-        // prevents the rare case of literally duplicate chapter titles for the same type
-        // from colliding on the DB primary key.
-        var dbResults = new Dictionary<(int SegmentType, string ChapterName), ChapterAnalysisResult>();
+        // Re-analysis must be idempotent: a recalculation with clearCache=false calls straight
+        // into here without a preceding cleanup, and the rows below would otherwise collide on
+        // the unique (ItemId, SegmentType, MatchedChapterName, StartTicks) index.
+        await db.ChapterAnalysisResults
+            .Where(r => r.ItemId == itemId && !ForeignSentinels.Contains(r.MatchedChapterName))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // Key mirrors the storage key: (SegmentType, MatchedChapterName, StartTicks). The same
+        // segment type recurs legitimately within one item - "Ad break" appears once per commercial
+        // break, and Intro → Commercial → Intro is a valid arrangement - so only chapters that are
+        // identical in name AND position are true duplicates. Keying on (type, name) alone kept
+        // just the first of each repeated title, silently dropping every later ad break.
+        var dbResults = new Dictionary<(int SegmentType, string ChapterName, long StartTicks), ChapterAnalysisResult>();
 
         for (int i = 0; i < chapters.Count; i++)
         {
@@ -222,18 +221,35 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             }
 
             var segmentTypeInt = (int)segmentType.Value;
-            var key = (segmentTypeInt, chapter.Name);
+            var startTicks = chapter.StartPositionTicks;
+            var key = (segmentTypeInt, chapter.Name, startTicks);
             if (dbResults.ContainsKey(key))
             {
                 _logger.LogDebug(
-                    "Chapter \"{ChapterName}\" matched as {Type} but an identical (type, name) entry already exists, skipping",
+                    "Chapter \"{ChapterName}\" matched as {Type} but an identical (type, name, start) entry already exists, skipping",
                     chapter.Name,
                     segmentType.Value);
                 continue;
             }
 
-            var startTicks = chapter.StartPositionTicks;
-            var endTicks = i + 1 < chapters.Count ? chapters[i + 1].StartPositionTicks : startTicks;
+            // A chapter is bounded by the next chapter's start; the final chapter is bounded by
+            // the item's runtime. Using startTicks as the end for the last chapter gave it a
+            // zero duration, which IsValidDuration always rejects - silently dropping the single
+            // most common outro layout, a trailing "Credits"/"Ending" chapter. When the runtime
+            // is unknown (0) there is nothing to bound it with, so it is still skipped.
+            var endTicks = i + 1 < chapters.Count
+                ? chapters[i + 1].StartPositionTicks
+                : runtimeTicks;
+
+            if (endTicks <= startTicks)
+            {
+                _logger.LogDebug(
+                    "Chapter \"{ChapterName}\" has no resolvable end position (start {Start}, runtime {Runtime}), skipping",
+                    chapter.Name,
+                    startTicks,
+                    runtimeTicks);
+                continue;
+            }
 
             var durationSeconds = (endTicks - startTicks) / (double)TimeSpan.TicksPerSecond;
             if (!IsValidDuration(segmentType.Value, durationSeconds, config, isMovie))
@@ -259,13 +275,17 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         }
 
         db.ChapterAnalysisResults.AddRange(dbResults.Values);
-        db.AnalysisStatuses.Add(new AnalysisStatus
-        {
-            ItemId = itemId,
-            ProviderName = Name,
-            AnalyzedAt = DateTime.UtcNow,
-            HasResults = dbResults.Values.Count > 0
-        });
+
+        // The config hash is recorded on the status row, not only on the result rows: an item
+        // that matched nothing has no result rows to carry a hash, so without this a chapter-name
+        // list change would never re-analyze exactly the items the change was meant to catch.
+        await AnalysisStatusWriter.UpsertAsync(
+            db,
+            itemId,
+            Name,
+            dbResults.Values.Count > 0,
+            configHash,
+            cancellationToken).ConfigureAwait(false);
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 

@@ -28,6 +28,16 @@ internal static class SegmentSourceNames
     internal const string BlackFramePreview = "blackframe-preview";
 
     /// <summary>
+    /// Matched chapter name for the refined intro segment produced by black-frame analysis.
+    /// </summary>
+    internal const string BlackFrameIntro = "blackframe-intro";
+
+    /// <summary>
+    /// Matched chapter name for the refined outro segment produced by black-frame analysis.
+    /// </summary>
+    internal const string BlackFrameOutro = "blackframe-outro";
+
+    /// <summary>
     /// Chromaprint fingerprint region name for intro analysis.
     /// </summary>
     internal const string RegionIntro = "Intro";
@@ -36,4 +46,50 @@ internal static class SegmentSourceNames
     /// Chromaprint fingerprint region name for credits analysis.
     /// </summary>
     internal const string RegionCredits = "Credits";
+
+    /// <summary>
+    /// Matched chapter name for segments imported from <c>.edl</c> sidecar files.
+    /// </summary>
+    internal const string EdlImportName = "edl-import";
+
+    /// <summary>
+    /// Matched chapter name for segments imported from the intro-skipper plugin database.
+    /// </summary>
+    internal const string IntroSkipperImportName = "intro-skipper import";
+
+    /// <summary>
+    /// Every sentinel <see cref="Data.Entities.ChapterAnalysisResult.MatchedChapterName"/> value
+    /// owned by a provider other than <c>ChapterNameProvider</c>.
+    /// </summary>
+    internal static readonly string[] ForeignToChapterName =
+    [
+        ChromaprintIntro,
+        ChromaprintCredits,
+        ChromaprintPreview,
+        BlackFrameIntro,
+        BlackFrameOutro,
+        BlackFramePreview,
+        EdlImportName,
+        IntroSkipperImportName,
+    ];
+
+    /// <summary>
+    /// Sentinels owned by the black-frame provider.
+    /// </summary>
+    internal static readonly string[] BlackFrameOwned =
+    [
+        BlackFrameIntro,
+        BlackFrameOutro,
+        BlackFramePreview,
+    ];
+
+    /// <summary>
+    /// Sentinels owned by the chromaprint provider.
+    /// </summary>
+    internal static readonly string[] ChromaprintOwned =
+    [
+        ChromaprintIntro,
+        ChromaprintCredits,
+        ChromaprintPreview,
+    ];
 }

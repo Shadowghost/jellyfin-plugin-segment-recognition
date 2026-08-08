@@ -26,6 +26,16 @@ public class DatabaseInitializer : IHostedService
     {
         using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+
+        // Write-ahead logging, set once on the database file (it is persistent, not per-connection).
+        // The analysis task writes from several workers in parallel while the segment providers
+        // read on the playback path; under the default rollback journal every one of those readers
+        // blocks behind a writer and vice versa, which surfaces as "database is locked". WAL lets
+        // readers proceed during a write. NORMAL synchronous is the standard companion setting for
+        // WAL: durability is only at risk on OS/power failure, and this database is a rebuildable
+        // cache.
+        await context.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", cancellationToken).ConfigureAwait(false);
+        await context.Database.ExecuteSqlRawAsync("PRAGMA synchronous=NORMAL;", cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

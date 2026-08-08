@@ -2,7 +2,6 @@ using System.Linq;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SegmentRecognition.Configuration;
 using Jellyfin.Plugin.SegmentRecognition.Providers;
-using MediaBrowser.Model.MediaSegments;
 using Xunit;
 
 namespace Jellyfin.Plugin.SegmentRecognition.Tests.Providers;

@@ -59,16 +59,35 @@ public class RefinementPipeline
         var (refinedStart, refinedEnd) = await _segmentRefiner.RefineSegmentAsync(
             startTicks, endTicks, filePath, videoCodec, cancellationToken).ConfigureAwait(false);
 
-        // Step 2: Chapter snapping
-        refinedStart = _chapterSnapper.SnapToChapter(itemId, refinedStart, cancellationToken);
-        refinedEnd = _chapterSnapper.SnapToChapter(itemId, refinedEnd, cancellationToken);
+        // Step 2: Chapter snapping. Both boundaries are snapped independently, so they can collapse
+        // onto the same marker; the guard below catches that.
+        var chapterStart = _chapterSnapper.SnapToChapter(itemId, refinedStart, cancellationToken);
+        var chapterEnd = _chapterSnapper.SnapToChapter(itemId, refinedEnd, cancellationToken);
+        if (chapterStart < chapterEnd)
+        {
+            refinedStart = chapterStart;
+            refinedEnd = chapterEnd;
+        }
 
         // Step 3: Keyframe snapping
         var windowTicks = (long)(config.KeyframeSnapWindowSeconds * TimeSpan.TicksPerSecond);
-        refinedStart = _keyframeSnapper.SnapToKeyframe(
+        var keyframeStart = _keyframeSnapper.SnapToKeyframe(
             itemId, refinedStart, windowTicks, snapBefore: true, cancellationToken);
-        refinedEnd = _keyframeSnapper.SnapToKeyframe(
+        var keyframeEnd = _keyframeSnapper.SnapToKeyframe(
             itemId, refinedEnd, windowTicks, snapBefore: false, cancellationToken);
+        if (keyframeStart < keyframeEnd)
+        {
+            refinedStart = keyframeStart;
+            refinedEnd = keyframeEnd;
+        }
+
+        // Final backstop: never hand back a zero-length or inverted range. Each stage snaps the
+        // two boundaries independently, so a degenerate result is possible even though no single
+        // stage is wrong; a segment with end <= start is worse than an unrefined one.
+        if (refinedStart >= refinedEnd)
+        {
+            return (startTicks, endTicks);
+        }
 
         return (refinedStart, refinedEnd);
     }

@@ -169,15 +169,10 @@ public class FfmpegChromaprintService
     /// <returns>The audio duration in seconds, or <c>null</c> if it could not be determined.</returns>
     public async Task<double?> ProbeAudioDurationAsync(string filePath, CancellationToken cancellationToken)
     {
-        var probePath = Path.ChangeExtension(_mediaEncoder.EncoderPath, null) + "probe";
-        if (!File.Exists(probePath))
+        var probePath = ResolveProbePath(_mediaEncoder.EncoderPath, File.Exists);
+        if (probePath is null)
         {
-            probePath = _mediaEncoder.EncoderPath.Replace("ffmpeg", "ffprobe", StringComparison.Ordinal);
-        }
-
-        if (!File.Exists(probePath))
-        {
-            _logger.LogDebug("ffprobe not found, cannot probe audio duration");
+            _logger.LogDebug("ffprobe not found next to {EncoderPath}, cannot probe audio duration", _mediaEncoder.EncoderPath);
             return null;
         }
 
@@ -263,6 +258,60 @@ public class FfmpegChromaprintService
             EnsureProcessKilled(process);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Derives the path to <c>ffprobe</c> from the configured <c>ffmpeg</c> path.
+    /// </summary>
+    /// <remarks>
+    /// Only the <em>file name</em> is rewritten. A whole-path string replace mangles the
+    /// directory on the standard Jellyfin layouts - <c>/usr/lib/jellyfin-ffmpeg/ffmpeg</c> became
+    /// <c>/usr/lib/jellyfin-ffprobe/ffprobe</c>, which does not exist, silently disabling audio
+    /// duration probing for most Linux and Docker installs. The executable extension is preserved
+    /// so <c>ffmpeg.exe</c> maps to <c>ffprobe.exe</c>.
+    /// </remarks>
+    /// <param name="encoderPath">The configured ffmpeg executable path.</param>
+    /// <param name="exists">Existence predicate (injected for testability).</param>
+    /// <returns>The ffprobe path, or <c>null</c> when no candidate exists.</returns>
+    internal static string? ResolveProbePath(string? encoderPath, Func<string, bool> exists)
+    {
+        ArgumentNullException.ThrowIfNull(exists);
+        if (string.IsNullOrEmpty(encoderPath))
+        {
+            return null;
+        }
+
+        var directory = Path.GetDirectoryName(encoderPath);
+        var fileName = Path.GetFileName(encoderPath);
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(fileName);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+
+        // "ffmpeg" -> "ffprobe", and vendored names like "jellyfin-ffmpeg" -> "jellyfin-ffprobe".
+        // Replace only the last occurrence so a directory-like prefix in the stem is preserved.
+        var probeStem = stem.LastIndexOf("ffmpeg", StringComparison.OrdinalIgnoreCase) is var idx and >= 0
+            ? string.Concat(stem.AsSpan(0, idx), "ffprobe", stem.AsSpan(idx + "ffmpeg".Length))
+            : stem + "probe";
+
+        var candidates = new[]
+        {
+            string.IsNullOrEmpty(directory) ? probeStem + extension : Path.Join(directory, probeStem + extension),
+            string.IsNullOrEmpty(directory) ? "ffprobe" + extension : Path.Join(directory, "ffprobe" + extension),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

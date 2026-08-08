@@ -36,6 +36,12 @@ public class ChromaprintResult
     public int AnalysisDurationSeconds { get; set; }
 
     /// <summary>
+    /// Gets or sets the absolute offset (in ticks) into the media file at which this
+    /// fingerprint starts.
+    /// </summary>
+    public long RegionStartTicks { get; set; }
+
+    /// <summary>
     /// Gets or sets a hash of the configuration parameters that were active when this
     /// fingerprint was generated. Used to detect stale results after config changes.
     /// </summary>

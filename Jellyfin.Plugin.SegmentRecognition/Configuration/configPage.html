@@ -405,6 +405,22 @@
                                 </fieldset>
 
                                 <fieldset class="verticalSection">
+                                    <legend>Chapter Snapping</legend>
+                                    <div class="checkboxContainer">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableChapterSnapping" />
+                                            <span>Enable Chapter Snapping</span>
+                                        </label>
+                                        <div class="fieldDescription">Snap segment boundaries to nearby chapter markers, which are usually more precise than detected boundaries.</div>
+                                    </div>
+                                    <div class="inputContainer" data-show-when="chkEnableChapterSnapping">
+                                        <label class="inputLabel" for="txtChapterSnapWindow">Chapter Snap Window (seconds)</label>
+                                        <input id="txtChapterSnapWindow" type="number" is="emby-input" min="0.5" max="60" step="0.5" />
+                                        <div class="fieldDescription">Maximum distance from boundary to search for chapter markers (default: 5.0).</div>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="verticalSection">
                                     <legend>Keyframe Snapping</legend>
                                     <div class="checkboxContainer">
                                         <label>
@@ -437,6 +453,16 @@
                                             <option value="0">Native (no downscaling)</option>
                                         </select>
                                         <div class="fieldDescription">Frames are downscaled to this height before analysis. Lower = faster. Uses GPU-side scaling when hardware acceleration is available.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtBlackFrameThreshold">Black Frame Threshold (%)</label>
+                                        <input id="txtBlackFrameThreshold" type="number" is="emby-input" min="1" max="100" step="1" />
+                                        <div class="fieldDescription">Percentage of a frame that must be black for it to count (default: 90). Changing this requires "Re-analyze Black Frames".</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtBlackFrameMinDuration">Minimum Cluster Duration (ms)</label>
+                                        <input id="txtBlackFrameMinDuration" type="number" is="emby-input" min="0" max="10000" step="50" />
+                                        <div class="fieldDescription">Shortest run of black frames treated as a segment boundary (default: 500). Applied to cached samples, so no re-scan is needed.</div>
                                     </div>
                                     <div class="checkboxContainer">
                                         <label>
@@ -517,6 +543,26 @@
                                         <label class="inputLabel" for="txtChromaprintAnalysisDuration">Max Analysis Duration (seconds)</label>
                                         <input id="txtChromaprintAnalysisDuration" type="number" is="emby-input" min="10" step="10" />
                                         <div class="fieldDescription">Maximum duration to fingerprint (capped to the intro analysis region).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtChromaprintSampleRate">Sample Rate (Hz)</label>
+                                        <input id="txtChromaprintSampleRate" type="number" is="emby-input" min="8000" max="48000" step="1" />
+                                        <div class="fieldDescription">Audio sample rate used for fingerprinting (default: 22050). Changing this regenerates every fingerprint.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtChromaprintMaxBitErrors">Max Bit Errors</label>
+                                        <input id="txtChromaprintMaxBitErrors" type="number" is="emby-input" min="0" max="32" step="1" />
+                                        <div class="fieldDescription">How many of the 32 bits per fingerprint point may differ and still count as a match (default: 6). Lower is stricter.</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtChromaprintMaxTimeSkip">Max Time Skip (seconds)</label>
+                                        <input id="txtChromaprintMaxTimeSkip" type="number" is="emby-input" min="0" max="30" step="0.5" />
+                                        <div class="fieldDescription">Largest gap between matching points before a matched run is broken (default: 3.5).</div>
+                                    </div>
+                                    <div class="inputContainer">
+                                        <label class="inputLabel" for="txtChromaprintInvertedIndexShift">Index Fuzz</label>
+                                        <input id="txtChromaprintInvertedIndexShift" type="number" is="emby-input" min="0" max="8" step="1" />
+                                        <div class="fieldDescription">Tolerance when looking up candidate alignments (default: 2). Higher finds more alignments but is slower.</div>
                                     </div>
                                     <div class="fieldDescription" style="margin-top: 0.5rem;">
                                         The minimum match length is driven by <b>Minimum Intro Duration</b> (intro pass) and
@@ -740,6 +786,14 @@
                         srLoadListEditor('PreviewChapterNames', config.PreviewChapterNames);
                         srLoadListEditor('CommercialChapterNames', config.CommercialChapterNames);
                         document.getElementById('txtChromaprintAnalysisDuration').value = config.ChromaprintAnalysisDurationSeconds;
+                        document.getElementById('txtChromaprintSampleRate').value = config.ChromaprintSampleRate;
+                        document.getElementById('txtChromaprintMaxBitErrors').value = config.ChromaprintMaxBitErrors;
+                        document.getElementById('txtChromaprintMaxTimeSkip').value = config.ChromaprintMaxTimeSkipSeconds;
+                        document.getElementById('txtChromaprintInvertedIndexShift').value = config.ChromaprintInvertedIndexShift;
+                        document.getElementById('chkEnableChapterSnapping').checked = config.EnableChapterSnapping;
+                        document.getElementById('txtChapterSnapWindow').value = config.ChapterSnapWindowSeconds;
+                        document.getElementById('txtBlackFrameThreshold').value = config.BlackFrameThreshold;
+                        document.getElementById('txtBlackFrameMinDuration').value = config.BlackFrameMinDurationMs;
                         applyConditionalVisibility();
                         Dashboard.hideLoadingMsg();
                     });
@@ -792,6 +846,14 @@
                         config.SilenceSnapOutwardSeconds = parseFloat(document.getElementById('txtSilenceSnapOutward').value);
                         config.EnableKeyframeSnapping = document.getElementById('chkEnableKeyframeSnapping').checked;
                         config.KeyframeSnapWindowSeconds = parseFloat(document.getElementById('txtKeyframeSnapWindow').value);
+                        config.EnableChapterSnapping = document.getElementById('chkEnableChapterSnapping').checked;
+                        config.ChapterSnapWindowSeconds = parseFloat(document.getElementById('txtChapterSnapWindow').value);
+                        config.BlackFrameThreshold = parseFloat(document.getElementById('txtBlackFrameThreshold').value);
+                        config.BlackFrameMinDurationMs = parseInt(document.getElementById('txtBlackFrameMinDuration').value, 10);
+                        config.ChromaprintSampleRate = parseInt(document.getElementById('txtChromaprintSampleRate').value, 10);
+                        config.ChromaprintMaxBitErrors = parseInt(document.getElementById('txtChromaprintMaxBitErrors').value, 10);
+                        config.ChromaprintMaxTimeSkipSeconds = parseFloat(document.getElementById('txtChromaprintMaxTimeSkip').value);
+                        config.ChromaprintInvertedIndexShift = parseInt(document.getElementById('txtChromaprintInvertedIndexShift').value, 10);
                         config.IntroChapterNames = srGetListEditorValues('IntroChapterNames');
                         config.OutroChapterNames = srGetListEditorValues('OutroChapterNames');
                         config.RecapChapterNames = srGetListEditorValues('RecapChapterNames');

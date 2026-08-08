@@ -29,6 +29,18 @@ namespace Jellyfin.Plugin.SegmentRecognition.ScheduledTasks;
 /// </summary>
 public class AnalyzeSegmentsTask : IScheduledTask
 {
+    /// <summary>
+    /// Fraction of known items that may disappear from the library in one run before the orphan
+    /// sweep treats the result as an incomplete library read and refuses to delete anything.
+    /// </summary>
+    private const double MaxOrphanFraction = 0.5;
+
+    /// <summary>
+    /// Below this many known items the orphan-ratio check is skipped: on a tiny cache a single
+    /// genuine removal can trivially exceed any percentage threshold.
+    /// </summary>
+    private const int MinItemsForOrphanRatioCheck = 20;
+
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSegmentManager _mediaSegmentManager;
     private readonly IDbContextFactory<SegmentDbContext> _dbContextFactory;
@@ -108,19 +120,19 @@ public class AnalyzeSegmentsTask : IScheduledTask
         if (forceOverwrite)
         {
             _logger.LogInformation("ForceRegenerate is enabled - all segments will be re-pushed to Jellyfin after analysis");
-            config.ForceRegenerate = false;
-            Plugin.Instance?.SaveConfiguration();
         }
 
-        if (config.ReanalyzeBlackFrames)
+        var reanalyzeBlackFrames = config.ReanalyzeBlackFrames;
+        if (reanalyzeBlackFrames)
         {
             _logger.LogInformation("ReanalyzeBlackFrames is enabled - clearing all cached black frame data");
-            config.ReanalyzeBlackFrames = false;
-            Plugin.Instance?.SaveConfiguration();
 
             using var cleanupDb = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
             await cleanupDb.BlackFrameResults.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await cleanupDb.CropDetectResults.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await cleanupDb.ChapterAnalysisResults
+                .Where(r => SegmentSourceNames.BlackFrameOwned.Contains(r.MatchedChapterName))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await cleanupDb.AnalysisStatuses
                 .Where(s => s.ProviderName == ProviderNames.BlackFrame)
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -206,6 +218,21 @@ public class AnalyzeSegmentsTask : IScheduledTask
             await ForcePushAllSegmentsAsync(stats.PushedItemIds, progress, cancellationToken).ConfigureAwait(false);
         }
 
+        // Clear the one-shot flags only now that the work they requested has actually been done.
+        // Clearing them up front lost the request whenever the task was cancelled or crashed -
+        // and in ReanalyzeBlackFrames' case it did so *after* already dropping the cache, leaving
+        // the user with neither the old data nor the re-analysis they asked for.
+        if (forceOverwrite || reanalyzeBlackFrames)
+        {
+            var liveConfig = Plugin.Instance?.Configuration;
+            if (liveConfig is not null)
+            {
+                liveConfig.ForceRegenerate = false;
+                liveConfig.ReanalyzeBlackFrames = false;
+                Plugin.Instance?.SaveConfiguration();
+            }
+        }
+
         progress.Report(100);
 
         if (stats.AnalysisFailed > 0)
@@ -258,7 +285,20 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // cache after a fresh restart and turn the orphan sweep into minutes of upfront
         // blocking before any item is enqueued.
         var validIds = _libraryManager.GetItemIds(new InternalItemsQuery { IncludeOwnedItems = true }).ToHashSet();
+
+        var knownIds = allIds.Count;
         allIds.ExceptWith(validIds);
+
+        if (IsOrphanSweepUnsafe(knownIds, validIds.Count, allIds.Count, out var reason))
+        {
+            _logger.LogWarning(
+                "Orphan sweep: refusing to delete {Orphans} of {Known} cached item(s) - {Reason}. "
+                + "Re-run the task once the library has finished scanning.",
+                allIds.Count,
+                knownIds,
+                reason);
+            return;
+        }
 
         if (allIds.Count == 0)
         {
@@ -285,6 +325,52 @@ public class AnalyzeSegmentsTask : IScheduledTask
             "Orphan sweep: deleted {Rows} row(s) across {Items} item(s) whose ItemId is no longer in the library",
             totalDeleted,
             orphans.Count);
+    }
+
+    /// <summary>
+    /// Decides whether an orphan sweep result is trustworthy enough to delete on.
+    /// </summary>
+    /// <remarks>
+    /// The sweep deletes every cached row whose item is absent from a single library query, so a
+    /// query that comes back empty or truncated - library database locked, a scan in flight, a
+    /// library temporarily unmounted - would wipe the whole cache and force hours of re-analysis.
+    /// A genuine mass-removal is recoverable (just delete the plugin database); an accidental wipe
+    /// is not, so the check errs towards keeping stale rows.
+    /// </remarks>
+    /// <param name="knownItemCount">Distinct item ids present in the plugin database.</param>
+    /// <param name="libraryItemCount">Item ids the library returned.</param>
+    /// <param name="orphanCount">Known ids absent from the library result.</param>
+    /// <param name="reason">Human-readable reason when unsafe.</param>
+    /// <returns><c>true</c> when the sweep must be skipped.</returns>
+    internal static bool IsOrphanSweepUnsafe(
+        int knownItemCount,
+        int libraryItemCount,
+        int orphanCount,
+        out string reason)
+    {
+        if (orphanCount == 0)
+        {
+            reason = string.Empty;
+            return false;
+        }
+
+        if (libraryItemCount == 0)
+        {
+            reason = "the library returned zero items";
+            return true;
+        }
+
+        if (knownItemCount >= MinItemsForOrphanRatioCheck
+            && orphanCount >= knownItemCount * MaxOrphanFraction)
+        {
+            reason = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{orphanCount / (double)knownItemCount:P0} of the cache would be deleted, which looks like an incomplete library read");
+            return true;
+        }
+
+        reason = string.Empty;
+        return false;
     }
 
     /// <summary>
@@ -455,13 +541,15 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         var chapterHash = ConfigHasher.ChapterName(config);
-        var bfHash = ConfigHasher.BlackFrame(config);
+        var bfExtractionHash = ConfigHasher.BlackFrameExtraction(config);
+        var bfSegmentHash = ConfigHasher.BlackFrameSegments(config);
 
         var chapterAnalyzed = new HashSet<Guid>();
         var blackFrameAnalyzed = new HashSet<Guid>();
         var chromaprintAnalyzed = new HashSet<Guid>();
         var staleChapter = new HashSet<Guid>();
-        var staleBlackFrame = new HashSet<Guid>();
+        var staleBlackFrameExtraction = new HashSet<Guid>();
+        var staleBlackFrameSegments = new HashSet<Guid>();
         var withFingerprint = new HashSet<Guid>();
         var fingerprintHashes = new Dictionary<(Guid, string), string?>();
 
@@ -469,10 +557,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // doesn't blow the IN(...) limit when EF expands Contains().
         foreach (var chunk in itemIds.Chunk(500))
         {
+            // Staleness is read off the STATUS row, not off the result rows. An item that matched
+            // nothing has no result rows to carry a config hash, so a result-row-only check could
+            // never re-analyze exactly the items a widened keyword list is meant to catch.
             var statuses = await db.AnalysisStatuses
                 .AsNoTracking()
                 .Where(s => chunk.Contains(s.ItemId))
-                .Select(s => new { s.ItemId, s.ProviderName })
+                .Select(s => new { s.ItemId, s.ProviderName, s.ConfigHash })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
@@ -481,10 +572,18 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 if (s.ProviderName == ProviderNames.ChapterName)
                 {
                     chapterAnalyzed.Add(s.ItemId);
+                    if (!string.Equals(s.ConfigHash, chapterHash, StringComparison.Ordinal))
+                    {
+                        staleChapter.Add(s.ItemId);
+                    }
                 }
                 else if (s.ProviderName == ProviderNames.BlackFrame)
                 {
                     blackFrameAnalyzed.Add(s.ItemId);
+                    if (!string.Equals(s.ConfigHash, bfSegmentHash, StringComparison.Ordinal))
+                    {
+                        staleBlackFrameSegments.Add(s.ItemId);
+                    }
                 }
                 else if (s.ProviderName == ProviderNames.Chromaprint)
                 {
@@ -492,14 +591,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 }
             }
 
+            // Result rows written by an older build carry a hash on the row but not on the status.
+            // Treat a stale row as stale too, so upgrades converge instead of getting stuck.
             var staleChapterIds = await db.ChapterAnalysisResults
                 .AsNoTracking()
                 .Where(r => chunk.Contains(r.ItemId)
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintIntro
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintCredits
-                    && r.MatchedChapterName != SegmentSourceNames.ChromaprintPreview
-                    && r.MatchedChapterName != EdlImportProvider.MatchedName
-                    && r.MatchedChapterName != ImportIntroSkipperDataTask.MatchedName
+                    && !SegmentSourceNames.ForeignToChapterName.Contains(r.MatchedChapterName)
                     && r.ConfigHash != chapterHash)
                 .Select(r => r.ItemId)
                 .Distinct()
@@ -507,14 +604,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 .ConfigureAwait(false);
             staleChapter.UnionWith(staleChapterIds);
 
+            // Extraction staleness means the cached samples themselves are unusable, so the
+            // (expensive) ffmpeg scan has to re-run. Segment staleness only means the cheap half
+            // of the pipeline changed and can be replayed from cache.
             var staleBfIds = await db.BlackFrameResults
                 .AsNoTracking()
-                .Where(r => chunk.Contains(r.ItemId) && r.ConfigHash != bfHash)
+                .Where(r => chunk.Contains(r.ItemId) && r.ConfigHash != bfExtractionHash)
                 .Select(r => r.ItemId)
                 .Distinct()
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
-            staleBlackFrame.UnionWith(staleBfIds);
+            staleBlackFrameExtraction.UnionWith(staleBfIds);
 
             var fingerprintRows = await db.ChromaprintResults
                 .AsNoTracking()
@@ -529,13 +629,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
             }
         }
 
+        // A full re-analysis subsumes a segment rebuild; don't do both.
+        staleBlackFrameSegments.ExceptWith(staleBlackFrameExtraction);
+
         return new StalenessSnapshot
         {
             ChapterAnalyzed = chapterAnalyzed,
             BlackFrameAnalyzed = blackFrameAnalyzed,
             ChromaprintAnalyzed = chromaprintAnalyzed,
             StaleChapterItems = staleChapter,
-            StaleBlackFrameItems = staleBlackFrame,
+            StaleBlackFrameItems = staleBlackFrameExtraction,
+            RebuildBlackFrameItems = staleBlackFrameSegments,
             ItemsWithFingerprint = withFingerprint,
             FingerprintHashes = fingerprintHashes,
         };
@@ -612,6 +716,23 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.LogWarning(ex, "Black frame analysis failed for \"{ItemName}\" ({Path})", item.Name, item.Path);
+                    stats.IncrementAnalysisFailed();
+                }
+            }
+            else if (staleness.RebuildBlackFrameItems.Contains(item.Id))
+            {
+                // Only the cheap half of the pipeline changed (clustering thresholds, duration
+                // windows, refinement settings). Replay it from the cached samples instead of
+                // paying for another full-file ffmpeg scan.
+                _logger.LogDebug("BlackFrame segment config changed for \"{ItemName}\", rebuilding from cache", item.Name);
+                try
+                {
+                    await _blackFrameProvider.RebuildSegmentsFromCacheAsync(item.Id, cancellationToken).ConfigureAwait(false);
+                    stats.IncrementBlackFrameAnalyzed();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Black frame segment rebuild failed for \"{ItemName}\" ({Path})", item.Name, item.Path);
                     stats.IncrementAnalysisFailed();
                 }
             }
@@ -871,6 +992,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
         public HashSet<Guid> StaleChapterItems { get; init; } = [];
 
         public HashSet<Guid> StaleBlackFrameItems { get; init; } = [];
+
+        /// <summary>
+        /// Gets items whose cached black-frame samples are still valid but whose clustering /
+        /// duration / refinement settings changed, so segments can be rebuilt from cache without
+        /// re-running the ffmpeg scan.
+        /// </summary>
+        public HashSet<Guid> RebuildBlackFrameItems { get; init; } = [];
 
         public HashSet<Guid> ItemsWithFingerprint { get; init; } = [];
 

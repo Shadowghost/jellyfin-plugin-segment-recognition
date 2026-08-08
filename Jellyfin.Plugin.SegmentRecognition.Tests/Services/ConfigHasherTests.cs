@@ -16,7 +16,8 @@ public class ConfigHasherTests
         Assert.Equal(ConfigHasher.ChromaprintCredits(config1), ConfigHasher.ChromaprintCredits(config2));
         Assert.Equal(ConfigHasher.ChromaprintComparison(config1), ConfigHasher.ChromaprintComparison(config2));
         Assert.Equal(ConfigHasher.ChapterName(config1), ConfigHasher.ChapterName(config2));
-        Assert.Equal(ConfigHasher.BlackFrame(config1), ConfigHasher.BlackFrame(config2));
+        Assert.Equal(ConfigHasher.BlackFrameExtraction(config1), ConfigHasher.BlackFrameExtraction(config2));
+        Assert.Equal(ConfigHasher.BlackFrameSegments(config1), ConfigHasher.BlackFrameSegments(config2));
     }
 
     [Fact]
@@ -56,13 +57,14 @@ public class ConfigHasherTests
     }
 
     [Fact]
-    public void BlackFrame_AlwaysReturnsSameHash()
+    public void BlackFrameExtraction_AlwaysReturnsSameHash()
     {
         var config1 = new PluginConfiguration();
         var config2 = new PluginConfiguration { BlackFrameThreshold = 50.0 };
 
-        // BlackFrame hash is a constant - config changes don't affect it.
-        Assert.Equal(ConfigHasher.BlackFrame(config1), ConfigHasher.BlackFrame(config2));
+        // Extraction hash is deliberately constant: re-scanning the whole library because a
+        // threshold moved is prohibitively expensive. ReanalyzeBlackFrames is the escape hatch.
+        Assert.Equal(ConfigHasher.BlackFrameExtraction(config1), ConfigHasher.BlackFrameExtraction(config2));
     }
 
     [Fact]
@@ -85,10 +87,11 @@ public class ConfigHasherTests
         var credits = ConfigHasher.ChromaprintCredits(config);
         var comparison = ConfigHasher.ChromaprintComparison(config);
         var chapter = ConfigHasher.ChapterName(config);
-        var blackFrame = ConfigHasher.BlackFrame(config);
+        var blackFrameExtraction = ConfigHasher.BlackFrameExtraction(config);
+        var blackFrameSegments = ConfigHasher.BlackFrameSegments(config);
 
         // All should be distinct.
-        var hashes = new[] { intro, credits, comparison, chapter, blackFrame };
+        var hashes = new[] { intro, credits, comparison, chapter, blackFrameExtraction, blackFrameSegments };
         Assert.Equal(hashes.Length, new System.Collections.Generic.HashSet<string>(hashes).Count);
     }
 
