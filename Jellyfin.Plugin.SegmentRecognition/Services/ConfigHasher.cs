@@ -26,8 +26,14 @@ public static class ConfigHasher
     /// occurrence instead of only the first, run length is counted in points, and a matched
     /// region now needs agreement from more than one counterpart.
     /// </para>
+    /// <para>
+    /// v3: counterparts are the nearest episodes rather than the first rows of the group,
+    /// equally-supported candidate regions are separated by length instead of by earliest start,
+    /// and intros/outros are pruned against the season's clustered positions (the thresholds that
+    /// rule uses are code constants; only its on/off switch is a config value).
+    /// </para>
     /// </summary>
-    private const int ChromaprintComparisonAlgoVersion = 2;
+    private const int ChromaprintComparisonAlgoVersion = 3;
 
     /// <summary>
     /// Version of the chromaprint fingerprint-generation algorithm, mixed into
@@ -117,6 +123,7 @@ public static class ConfigHasher
             $"cp-cmp|algo={ChromaprintComparisonAlgoVersion}|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}"
             + $"|mbe={config.ChromaprintMaxBitErrors}|mts={config.ChromaprintMaxTimeSkipSeconds}|iis={config.ChromaprintInvertedIndexShift}"
             + $"|epi={config.EnablePreviewInference}|minP={config.MinPreviewDurationSeconds}|maxP={config.MaxPreviewDurationSeconds}"
+            + $"|sop={config.EnableSeasonOutlierPruning}"
             + $"{RefinementFragment(config)}");
         return ComputeHash(input);
     }

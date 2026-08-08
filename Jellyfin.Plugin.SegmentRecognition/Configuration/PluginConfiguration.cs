@@ -235,6 +235,19 @@ public class PluginConfiguration : BasePluginConfiguration
     public int MaxParallelGroups { get; set; } = 2;
 
     /// <summary>
+    /// Gets or sets a value indicating whether a detected intro or outro is discarded when it sits
+    /// at a position almost no other episode in the season shares.
+    /// <para>
+    /// An episode that has no intro of its own can still produce one, by matching an incidental
+    /// music cue it happens to share with a sibling. Those land at scattered positions, while real
+    /// segments cluster on the handful of positions the season's format uses - intros measured
+    /// from the start of the file, outros from the end. Seasons with no dominant position are left
+    /// alone, so shows whose placement genuinely varies are not affected.
+    /// </para>
+    /// </summary>
+    public bool EnableSeasonOutlierPruning { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets a value indicating whether silence-based refinement of segment boundaries is enabled.
     /// </summary>
     public bool EnableSilenceRefinement { get; set; } = true;

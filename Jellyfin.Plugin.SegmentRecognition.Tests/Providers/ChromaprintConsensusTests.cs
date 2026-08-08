@@ -133,10 +133,11 @@ public sealed class ChromaprintConsensusTests
     }
 
     /// <summary>
-    /// Two equally-supported clusters resolve to the earlier one, deterministically.
+    /// Two equally-supported clusters of the same length resolve to the earlier one,
+    /// deterministically.
     /// </summary>
     [Fact]
-    public void TiedClusters_ResolveToTheEarlierOne()
+    public void TiedClustersOfEqualLength_ResolveToTheEarlierOne()
     {
         var candidates = new List<(long, long)>
         {
@@ -150,5 +151,57 @@ public sealed class ChromaprintConsensusTests
 
         Assert.NotNull(result);
         Assert.Equal(Region(10.2, 0).Item1, result!.Value.StartTicks);
+    }
+
+    /// <summary>
+    /// An episode sitting on a mid-season opening change splits its counterparts evenly: the ones
+    /// from the other half of the season share only the short ident every file starts with, the
+    /// ones from its own half share the real opening. Cluster size cannot separate them, and
+    /// falling back to earliest start would pick the ident.
+    /// </summary>
+    [Fact]
+    public void TiedClusters_PreferTheLongerRegion()
+    {
+        var candidates = new List<(long, long)>
+        {
+            // Four counterparts from the other cour: only the distributor ident is shared.
+            Region(0, 6),
+            Region(0.1, 6.1),
+            Region(0.2, 6.2),
+            Region(0.3, 6.3),
+
+            // Four counterparts from this cour: the actual opening, after a cold open.
+            Region(30, 120),
+            Region(30.2, 120.2),
+            Region(30.4, 120.4),
+            Region(30.6, 120.6),
+        };
+
+        var result = ChromaprintProvider.SelectConsensusRegion(candidates, counterpartsCompared: 8);
+
+        Assert.NotNull(result);
+        Assert.Equal(Region(30.4, 0).Item1, result!.Value.StartTicks);
+    }
+
+    /// <summary>
+    /// Length only breaks ties - it must not override corroboration, or one long spurious pairing
+    /// would outrank the region most counterparts actually agree on.
+    /// </summary>
+    [Fact]
+    public void MoreVotesBeatsALongerButLessSupportedCluster()
+    {
+        var candidates = new List<(long, long)>
+        {
+            Region(30, 45),
+            Region(30.2, 45.2),
+            Region(30.4, 45.4),
+            Region(200, 400),
+            Region(200.2, 400.2),
+        };
+
+        var result = ChromaprintProvider.SelectConsensusRegion(candidates, counterpartsCompared: 5);
+
+        Assert.NotNull(result);
+        Assert.Equal(Region(30.2, 0).Item1, result!.Value.StartTicks);
     }
 }

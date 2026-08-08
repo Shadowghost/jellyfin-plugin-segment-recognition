@@ -36,6 +36,10 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// no real match degenerates badly. A handful of counterparts is ample for a majority vote
     /// and bounds the work at O(N).
     /// </para>
+    /// <para>
+    /// Which counterparts those are matters as much as how many - see
+    /// <see cref="NeighboursByDistance"/>.
+    /// </para>
     /// </summary>
     private const int MaxCounterpartsPerItem = 8;
 
@@ -45,6 +49,45 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// agreeing matches rarely land on exactly the same tick.
     /// </summary>
     private const long ConsensusToleranceTicks = 2 * TimeSpan.TicksPerSecond;
+
+    /// <summary>
+    /// How far apart two episodes' intros may start and still count as the same season position.
+    /// Generous: what it separates is "after the same cold open" from "somewhere else entirely",
+    /// and cold-open lengths drift by tens of seconds within a season.
+    /// </summary>
+    private const long IntroPositionToleranceTicks = 120 * TimeSpan.TicksPerSecond;
+
+    /// <summary>
+    /// The same tolerance for outros, which are measured back from the end of the file.
+    /// <para>
+    /// Much tighter than the intro's, because the two positions are set by different things: an
+    /// intro's offset depends on the cold open, which varies episode to episode, while an outro's
+    /// distance from the end is the length of the credits, which a season keeps fixed. The whole
+    /// outro population also lives inside the last <c>CreditsAnalysisDurationSeconds</c> of the
+    /// file, so the intro's 120 s would span half the searchable window and cluster everything
+    /// together.
+    /// </para>
+    /// </summary>
+    private const long OutroPositionToleranceTicks = 30 * TimeSpan.TicksPerSecond;
+
+    /// <summary>
+    /// How many episodes must share a position before it counts as a format variant rather than
+    /// noise. Two episodes agreeing is exactly what a spurious shared music cue produces - it
+    /// takes two counterparts to pass consensus in the first place - so the bar sits above it.
+    /// </summary>
+    private const int MinSeasonClusterSize = 3;
+
+    /// <summary>
+    /// Fraction of a season's intros that must share one position before the remainder can be
+    /// treated as stragglers. See <see cref="SelectSeasonOutliers"/>.
+    /// </summary>
+    private const double SeasonDominanceFraction = 0.6;
+
+    /// <summary>
+    /// Below this many segments a season carries too little evidence to judge any of them: a
+    /// cluster of three out of five is a "majority" that means nothing.
+    /// </summary>
+    private const int MinSegmentsForSeasonPruning = 6;
 
     private readonly FfmpegChromaprintService _chromaprintService;
     private readonly ILibraryManager _libraryManager;
@@ -376,13 +419,15 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         introFingerprints = FilterOutOrphans(introFingerprints, groupId, SegmentSourceNames.RegionIntro);
 
-        await AnalyzeRegionAsync(
+        var introOutcomes = await AnalyzeRegionAsync(
             db,
             introFingerprints,
             MediaSegmentType.Intro,
             SegmentSourceNames.ChromaprintIntro,
             config,
             cancellationToken).ConfigureAwait(false);
+
+        var outroOutcomes = new Dictionary<Guid, SegmentMatchOutcome>();
 
         // Credits pass
         if (config.EnableCreditsFingerprinting)
@@ -395,7 +440,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
             creditsFingerprints = FilterOutOrphans(creditsFingerprints, groupId, SegmentSourceNames.RegionCredits);
 
-            await AnalyzeRegionAsync(
+            outroOutcomes = await AnalyzeRegionAsync(
                 db,
                 creditsFingerprints,
                 MediaSegmentType.Outro,
@@ -447,11 +492,26 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         {
             var hasResults = itemsWithResults.Contains(itemId);
 
+            // Only items this run actually evaluated appear in the outcome maps; an item skipped
+            // because its stored result is still current keeps whatever outcome it already had.
+            var introOutcome = introOutcomes.TryGetValue(itemId, out var io) ? io : (SegmentMatchOutcome?)null;
+            var outroOutcome = outroOutcomes.TryGetValue(itemId, out var oo) ? oo : (SegmentMatchOutcome?)null;
+
             if (existingStatuses.TryGetValue(itemId, out var existingStatus))
             {
                 existingStatus.HasResults = hasResults;
                 existingStatus.AnalyzedAt = DateTime.UtcNow;
                 existingStatus.ConfigHash = currentComparisonHash;
+
+                if (introOutcome is not null)
+                {
+                    existingStatus.IntroOutcome = introOutcome;
+                }
+
+                if (outroOutcome is not null)
+                {
+                    existingStatus.OutroOutcome = outroOutcome;
+                }
             }
             else
             {
@@ -461,7 +521,9 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                     ProviderName = Name,
                     AnalyzedAt = DateTime.UtcNow,
                     HasResults = hasResults,
-                    ConfigHash = currentComparisonHash
+                    ConfigHash = currentComparisonHash,
+                    IntroOutcome = introOutcome,
+                    OutroOutcome = outroOutcome
                 });
             }
         }
@@ -483,7 +545,15 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             allItemIds.Count);
     }
 
-    private async Task AnalyzeRegionAsync(
+    /// <summary>
+    /// Compares one region across a group and writes the agreed segments.
+    /// </summary>
+    /// <returns>
+    /// Why each item this run evaluated did or did not get a segment. Items skipped because
+    /// their stored result is still current are absent, so the caller leaves their recorded
+    /// outcome alone.
+    /// </returns>
+    private async Task<Dictionary<Guid, SegmentMatchOutcome>> AnalyzeRegionAsync(
         SegmentDbContext db,
         List<ChromaprintResult> fingerprints,
         MediaSegmentType segmentType,
@@ -491,13 +561,27 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         PluginConfiguration config,
         CancellationToken cancellationToken)
     {
+        var outcomes = new Dictionary<Guid, SegmentMatchOutcome>();
+
         if (fingerprints.Count < 2)
         {
-            return;
+            // A lone fingerprint has nothing to be compared against; say so rather than leaving
+            // the item indistinguishable from one that was never analyzed.
+            foreach (var only in fingerprints)
+            {
+                outcomes[only.ItemId] = SegmentMatchOutcome.NoComparableCounterparts;
+            }
+
+            return outcomes;
         }
 
         var isCredits = string.Equals(matchedChapterName, SegmentSourceNames.ChromaprintCredits, StringComparison.Ordinal);
         var comparisonHash = ConfigHasher.ChromaprintComparison(config);
+
+        // Put the group in episode order so "counterpart" can mean "a nearby episode" below.
+        // The query that produced this list has no ORDER BY, so its order was whatever SQLite
+        // happened to return - which made every item's result depend on row order.
+        fingerprints = OrderByEpisode(fingerprints);
 
         // =================================================================================
         // Phase 1 - read existing results (no transaction, no-tracking).
@@ -582,11 +666,15 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             var candidates = new List<(long StartTicks, long EndTicks)>();
             var counterpartsCompared = 0;
 
-            for (int j = 0; j < fingerprints.Count && counterpartsCompared < MaxCounterpartsPerItem; j++)
+            // Tracked so a failure can say whether nothing was shared at all or whether shared
+            // audio was found and then rejected by the duration/position windows.
+            var anySharedRegion = false;
+
+            foreach (var j in NeighboursByDistance(i, fingerprints.Count))
             {
-                if (i == j)
+                if (counterpartsCompared >= MaxCounterpartsPerItem)
                 {
-                    continue;
+                    break;
                 }
 
                 var other = fingerprints[j];
@@ -607,6 +695,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                     config.ChromaprintInvertedIndexShift,
                     minMatchDurationSeconds,
                     cancellationToken);
+
+                anySharedRegion |= matchedRegions.Count > 0;
 
                 foreach (var (startTicks, endTicks) in matchedRegions)
                 {
@@ -649,6 +739,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             }
 
             var consensus = SelectConsensusRegion(candidates, counterpartsCompared);
+
+            outcomes[current.ItemId] = ClassifyOutcome(
+                consensus is not null,
+                counterpartsCompared,
+                anySharedRegion,
+                candidates.Count);
+
             var bestMatch = consensus is null
                 ? null
                 : new MediaSegmentDto
@@ -735,9 +832,21 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             }
         }
 
+        if (config.EnableSeasonOutlierPruning)
+        {
+            PruneSeasonOutliers(
+                matchedChapterName,
+                segmentType,
+                isCredits,
+                existingResultsByItem,
+                itemsToReset,
+                toAdd,
+                outcomes);
+        }
+
         if (itemsToReset.Count == 0 && toAdd.Count == 0)
         {
-            return;
+            return outcomes;
         }
 
         // =================================================================================
@@ -776,6 +885,269 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return outcomes;
+    }
+
+    /// <summary>
+    /// Applies <see cref="SelectSeasonOutliers"/> to the whole season and removes what it flags.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The population has to span the season, not just the items re-evaluated on this run:
+    /// judging a straggler needs the positions its siblings agreed on, and on an incremental run
+    /// most of those come from rows written earlier. Rows belonging to items already queued for
+    /// deletion are excluded - they are about to be replaced by the entries in
+    /// <paramref name="toAdd"/>, which are counted instead.
+    /// </para>
+    /// <para>
+    /// Intros are positioned from the start of the file and outros from the end, because that is
+    /// what each one is actually anchored to. Runtimes vary widely inside a season - by more than
+    /// 15 minutes in the top decile of the sample library - so measuring a credits sequence from
+    /// the start of the file scatters a season that is in fact perfectly consistent: on that
+    /// library only 57% of seasons showed a dominant outro position start-relative, against 96%
+    /// end-relative.
+    /// </para>
+    /// </remarks>
+    private void PruneSeasonOutliers(
+        string matchedChapterName,
+        MediaSegmentType segmentType,
+        bool isCredits,
+        Dictionary<Guid, ChapterAnalysisResult> existingResultsByItem,
+        List<Guid> itemsToReset,
+        List<ChapterAnalysisResult> toAdd,
+        Dictionary<Guid, SegmentMatchOutcome> outcomes)
+    {
+        var replaced = itemsToReset.ToHashSet();
+        var freshByItem = toAdd
+            .Where(r => string.Equals(r.MatchedChapterName, matchedChapterName, StringComparison.Ordinal))
+            .ToDictionary(r => r.ItemId);
+
+        var candidates = freshByItem
+            .Select(kvp => (ItemId: kvp.Key, kvp.Value.StartTicks))
+            .Concat(existingResultsByItem
+                .Where(kvp => !replaced.Contains(kvp.Key) && !freshByItem.ContainsKey(kvp.Key))
+                .Select(kvp => (ItemId: kvp.Key, kvp.Value.StartTicks)));
+
+        var population = new List<(Guid ItemId, long PositionTicks)>();
+        foreach (var (itemId, startTicks) in candidates)
+        {
+            if (!isCredits)
+            {
+                population.Add((itemId, startTicks));
+                continue;
+            }
+
+            // An outro's position is its distance back from the end of the file. An item whose
+            // runtime is unknown has no such coordinate, so it cannot be judged either way.
+            var runtimeTicks = _libraryManager.GetItemById(itemId)?.RunTimeTicks ?? 0;
+            if (runtimeTicks > 0)
+            {
+                population.Add((itemId, runtimeTicks - startTicks));
+            }
+        }
+
+        var outliers = SelectSeasonOutliers(
+            population,
+            isCredits ? OutroPositionToleranceTicks : IntroPositionToleranceTicks);
+
+        if (outliers.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var itemId in outliers)
+        {
+            if (freshByItem.TryGetValue(itemId, out var fresh))
+            {
+                toAdd.Remove(fresh);
+
+                // Preview rows are inferred from the credits boundary, so a discarded outro must
+                // take its preview with it. Rows written by an earlier run are already handled:
+                // the credits branch of the stale-delete purges previews in lock-step.
+                if (isCredits)
+                {
+                    toAdd.RemoveAll(r => r.ItemId == itemId
+                        && string.Equals(r.MatchedChapterName, SegmentSourceNames.ChromaprintPreview, StringComparison.Ordinal));
+                }
+            }
+            else
+            {
+                // Written by an earlier run and untouched by this one, so it is only removed by
+                // being queued for deletion here.
+                itemsToReset.Add(itemId);
+            }
+
+            outcomes[itemId] = SegmentMatchOutcome.SeasonOutlier;
+        }
+
+        _logger.LogDebug(
+            "Chromaprint: dropped {Count} {Segment} segment(s) sitting at a position the rest of the season does not share",
+            outliers.Count,
+            segmentType);
+    }
+
+    /// <summary>
+    /// Picks the segments in a season that sit at a position essentially no other episode shares.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An episode that has no intro of its own can still produce one: with nothing at the front to
+    /// lock onto, the matcher falls through to whatever incidental music cue it happens to share
+    /// with a sibling, and a cue corroborated by two counterparts passes consensus. Those land at
+    /// arbitrary positions - 217 s, 490 s, 503 s in a season where seventeen episodes agree on 0 s.
+    /// </para>
+    /// <para>
+    /// The test is deliberately <em>not</em> distance from the season's average position. Seasons
+    /// legitimately carry several intro positions, because the cold open before the titles varies:
+    /// one 197-episode arc in the sample library splits 141 episodes at 0 s, 41 at 196 s and 15 at
+    /// 271 s, all correct. Rejecting on distance would have discarded 56 good intros there. What
+    /// separates a format variant from noise is not where it sits but how many episodes
+    /// independently landed on it, so this clusters the season's positions and drops only the
+    /// clusters too small to be a variant.
+    /// </para>
+    /// <para>
+    /// Pruning is skipped entirely unless one cluster holds a clear majority of the season. Without
+    /// a dominant position there is no established format for a straggler to be a straggler
+    /// <em>from</em> - the season's matching is simply unreliable, and guessing which scattered
+    /// results are wrong would remove as many good ones as bad.
+    /// </para>
+    /// </remarks>
+    /// <param name="population">
+    /// Every segment of this kind in the season, as (item, position). The position is measured in
+    /// whichever direction the segment is anchored - see <see cref="PruneSeasonOutliers"/>.
+    /// </param>
+    /// <param name="toleranceTicks">How far apart two positions may be and still count as one.</param>
+    /// <returns>The items whose segment should be discarded.</returns>
+    internal static IReadOnlyCollection<Guid> SelectSeasonOutliers(
+        IReadOnlyList<(Guid ItemId, long PositionTicks)> population,
+        long toleranceTicks)
+    {
+        ArgumentNullException.ThrowIfNull(population);
+
+        if (population.Count < MinSegmentsForSeasonPruning)
+        {
+            return [];
+        }
+
+        var ordered = population.OrderBy(p => p.PositionTicks).ToList();
+
+        // Greedy chaining against each cluster's first member, matching SelectConsensusRegion.
+        var clusters = new List<List<(Guid ItemId, long PositionTicks)>>();
+        var current = new List<(Guid ItemId, long PositionTicks)> { ordered[0] };
+        for (int i = 1; i < ordered.Count; i++)
+        {
+            if (ordered[i].PositionTicks - current[0].PositionTicks <= toleranceTicks)
+            {
+                current.Add(ordered[i]);
+                continue;
+            }
+
+            clusters.Add(current);
+            current = [ordered[i]];
+        }
+
+        clusters.Add(current);
+
+        var largest = clusters.Max(c => c.Count);
+        if (largest < population.Count * SeasonDominanceFraction)
+        {
+            return [];
+        }
+
+        return clusters
+            .Where(c => c.Count < MinSeasonClusterSize)
+            .SelectMany(c => c)
+            .Select(c => c.ItemId)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Turns the state of one item's comparison into the reason it did or did not get a segment.
+    /// </summary>
+    /// <param name="hasConsensus">Whether a region was agreed on.</param>
+    /// <param name="counterpartsCompared">How many counterparts were actually compared.</param>
+    /// <param name="anySharedRegion">Whether any counterpart shared a run of audio at all.</param>
+    /// <param name="candidateCount">How many counterparts produced an in-window region.</param>
+    /// <returns>The outcome to record.</returns>
+    internal static SegmentMatchOutcome ClassifyOutcome(
+        bool hasConsensus,
+        int counterpartsCompared,
+        bool anySharedRegion,
+        int candidateCount)
+    {
+        if (hasConsensus)
+        {
+            return SegmentMatchOutcome.Matched;
+        }
+
+        if (counterpartsCompared == 0)
+        {
+            return SegmentMatchOutcome.NoComparableCounterparts;
+        }
+
+        if (!anySharedRegion)
+        {
+            return SegmentMatchOutcome.NoSharedAudio;
+        }
+
+        // Shared audio existed, so the loss happened either in the window filters or in the vote.
+        return candidateCount == 0
+            ? SegmentMatchOutcome.OutsideWindow
+            : SegmentMatchOutcome.NoConsensus;
+    }
+
+    /// <summary>
+    /// Orders a group's fingerprints by episode number so index distance in the list is a proxy
+    /// for broadcast adjacency. Items that are not episodes (or carry no index) sort last, in a
+    /// stable order, so they never displace real episodes from each other's neighbourhoods.
+    /// </summary>
+    private List<ChromaprintResult> OrderByEpisode(List<ChromaprintResult> fingerprints)
+    {
+        return fingerprints
+            .OrderBy(f => (_libraryManager.GetItemById(f.ItemId) as Episode)?.IndexNumber ?? int.MaxValue)
+            .ThenBy(f => f.ItemId)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Enumerates every index of a list other than <paramref name="index"/>, nearest first,
+    /// alternating below/above so both directions are sampled evenly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Counterparts used to be taken as simply the first <see cref="MaxCounterpartsPerItem"/> rows
+    /// of the group. A season whose opening changes partway through - split-cour anime, a
+    /// mid-season rebrand - contains two disjoint sets of episodes that share an OP, and under
+    /// that rule every episode past the eighth was only ever compared against the head of the
+    /// season. The only audio the two halves have in common is whatever is glued to the front of
+    /// every file (a distributor ident), so the second half's intro collapsed onto that instead of
+    /// its actual opening.
+    /// </para>
+    /// <para>
+    /// Walking outwards from each item keeps the comparison inside the run of episodes most likely
+    /// to share an opening, and costs nothing extra: the same number of pairs are compared.
+    /// </para>
+    /// </remarks>
+    /// <param name="index">The index to walk outwards from.</param>
+    /// <param name="count">The number of items in the list.</param>
+    /// <returns>The other indices, in ascending order of distance from <paramref name="index"/>.</returns>
+    internal static IEnumerable<int> NeighboursByDistance(int index, int count)
+    {
+        for (int distance = 1; distance < count; distance++)
+        {
+            var before = index - distance;
+            if (before >= 0)
+            {
+                yield return before;
+            }
+
+            var after = index + distance;
+            if (after < count)
+            {
+                yield return after;
+            }
+        }
     }
 
     /// <summary>
@@ -791,7 +1163,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// When there are at least two comparable counterparts a region must be corroborated by two
     /// of them; a single agreeing counterpart is accepted only when that is all there is (a
     /// two-episode season). This is what stops one spurious pairing from defining an item's
-    /// intro. Ties are broken by earliest start so the result never depends on row order.
+    /// intro. Equally-supported clusters are separated by length and then by earliest start, so
+    /// the result never depends on row order.
     /// </para>
     /// </remarks>
     /// <param name="candidates">One candidate region per counterpart, in absolute ticks.</param>
@@ -826,9 +1199,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // Strictly greater keeps the earliest cluster on a tie, which makes the choice
-            // independent of enumeration order.
-            if (best is null || current.Count > best.Count)
+            if (best is null || IsBetterCluster(current, best))
             {
                 best = current;
             }
@@ -845,6 +1216,39 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         }
 
         return (Median(best.Select(c => c.StartTicks)), Median(best.Select(c => c.EndTicks)));
+    }
+
+    /// <summary>
+    /// Ranks two candidate clusters: more corroboration first, then the longer region.
+    /// </summary>
+    /// <remarks>
+    /// At a mid-season opening change the counterparts of an episode sitting on the boundary split
+    /// evenly between the old opening and the new one, so cluster size alone cannot decide. The
+    /// clusters are not equally informative though: one of them is the real opening (a minute or
+    /// more) and the other is whatever short ident every file in the season begins with. Falling
+    /// back to earliest start would hand the segment to the ident. Only a strict improvement
+    /// replaces the incumbent, so a genuine tie still resolves to the earliest cluster and the
+    /// choice stays independent of enumeration order.
+    /// </remarks>
+    private static bool IsBetterCluster(
+        List<(long StartTicks, long EndTicks)> candidate,
+        List<(long StartTicks, long EndTicks)> incumbent)
+    {
+        if (candidate.Count != incumbent.Count)
+        {
+            return candidate.Count > incumbent.Count;
+        }
+
+        return ClusterDurationTicks(candidate) > ClusterDurationTicks(incumbent);
+    }
+
+    /// <summary>
+    /// The duration of the region a cluster represents, measured on the same medians that
+    /// <see cref="SelectConsensusRegion"/> returns so ranking and result can never disagree.
+    /// </summary>
+    private static long ClusterDurationTicks(List<(long StartTicks, long EndTicks)> cluster)
+    {
+        return Median(cluster.Select(c => c.EndTicks)) - Median(cluster.Select(c => c.StartTicks));
     }
 
     private static long Median(IEnumerable<long> values)

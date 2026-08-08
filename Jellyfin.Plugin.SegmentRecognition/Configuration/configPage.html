@@ -294,6 +294,13 @@
                                         </label>
                                         <div class="fieldDescription">When a detected outro/credits ends before the episode ends, mark the remaining portion as a Preview segment. Requires credits fingerprinting. Tune the min/max thresholds on the Detection tab.</div>
                                     </div>
+                                    <div class="checkboxContainer" data-show-when="chkEnableChromaprintProvider">
+                                        <label>
+                                            <input type="checkbox" is="emby-checkbox" id="chkEnableSeasonOutlierPruning" />
+                                            <span>Discard Out-of-Place Segments</span>
+                                        </label>
+                                        <div class="fieldDescription">An episode with no intro of its own can still match an incidental music cue shared with another episode, producing a segment at an arbitrary position. Discards intros and outros that sit where almost no other episode in the season has one &ndash; intros measured from the start of the file, outros from the end. Seasons with no dominant position are left untouched, so shows whose placement genuinely varies are unaffected.</div>
+                                    </div>
                                 </fieldset>
                             </section>
 
@@ -760,6 +767,7 @@
                         document.getElementById('txtCreditsAnalysisDuration').value = config.CreditsAnalysisDurationSeconds;
                         document.getElementById('chkProbeAudioDuration').checked = config.ProbeAudioDuration;
                         document.getElementById('chkEnablePreviewInference').checked = config.EnablePreviewInference;
+                        document.getElementById('chkEnableSeasonOutlierPruning').checked = config.EnableSeasonOutlierPruning;
                         document.getElementById('txtMinPreviewDuration').value = config.MinPreviewDurationSeconds;
                         document.getElementById('txtMaxPreviewDuration').value = config.MaxPreviewDurationSeconds;
                         document.getElementById('selBlackFrameAnalysisHeight').value = config.BlackFrameAnalysisHeight;
@@ -826,6 +834,7 @@
                         config.CreditsAnalysisDurationSeconds = parseInt(document.getElementById('txtCreditsAnalysisDuration').value, 10);
                         config.ProbeAudioDuration = document.getElementById('chkProbeAudioDuration').checked;
                         config.EnablePreviewInference = document.getElementById('chkEnablePreviewInference').checked;
+                        config.EnableSeasonOutlierPruning = document.getElementById('chkEnableSeasonOutlierPruning').checked;
                         config.MinPreviewDurationSeconds = parseInt(document.getElementById('txtMinPreviewDuration').value, 10);
                         config.MaxPreviewDurationSeconds = parseInt(document.getElementById('txtMaxPreviewDuration').value, 10);
                         config.BlackFrameAnalysisHeight = parseInt(document.getElementById('selBlackFrameAnalysisHeight').value, 10);
