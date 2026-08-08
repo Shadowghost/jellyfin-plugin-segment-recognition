@@ -527,9 +527,20 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         var currentComparisonHash = ConfigHasher.ChromaprintComparison(config);
         var lostResults = new List<Guid>();
 
+        // The persisted SeriesId can be empty (see AnalysisGrouping.GetContainerId); fall back
+        // to the ancestor walk before resolving containers per item.
+        var groupContainerId = Guid.Empty;
+        if (_libraryManager.GetItemById(groupId) is Season season)
+        {
+            groupContainerId = season.SeriesId != Guid.Empty ? season.SeriesId : season.FindSeriesId();
+        }
+
         foreach (var itemId in allItemIds)
         {
             var hasResults = itemsWithResults.Contains(itemId);
+            var containerId = groupContainerId != Guid.Empty
+                ? groupContainerId
+                : AnalysisGrouping.GetContainerId(_libraryManager.GetItemById(itemId), itemId);
 
             // Only items this run actually evaluated appear in the outcome maps; an item skipped
             // because its stored result is still current keeps whatever outcome it already had.
@@ -546,6 +557,10 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 existingStatus.HasResults = hasResults;
                 existingStatus.AnalyzedAt = DateTime.UtcNow;
                 existingStatus.ConfigHash = currentComparisonHash;
+                if (containerId != Guid.Empty)
+                {
+                    existingStatus.ContainerId = containerId;
+                }
 
                 if (introOutcome is not null)
                 {
@@ -562,6 +577,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 db.AnalysisStatuses.Add(new AnalysisStatus
                 {
                     ItemId = itemId,
+                    ContainerId = containerId,
                     ProviderName = Name,
                     AnalyzedAt = DateTime.UtcNow,
                     HasResults = hasResults,

@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
 {
     [DbContext(typeof(SegmentDbContext))]
-    [Migration("20260808121236_SurrogateChapterKeyAndRegionOffset")]
-    partial class SurrogateChapterKeyAndRegionOffset
+    [Migration("20260808120000_AddAnalysisStatusContainerIdIndex")]
+    partial class AddAnalysisStatusContainerIdIndex
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -47,6 +47,8 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("ItemId", "ProviderName");
+
+                    b.HasIndex("ContainerId");
 
                     b.HasIndex("ItemId");
 

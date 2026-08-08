@@ -17,6 +17,7 @@ internal static class AnalysisStatusWriter
     /// </summary>
     /// <param name="db">The database context.</param>
     /// <param name="itemId">The item identifier.</param>
+    /// <param name="containerId">The container (rollup) identifier; ignored when empty.</param>
     /// <param name="providerName">The provider name.</param>
     /// <param name="hasResults">Whether this provider stored any segments for the item.</param>
     /// <param name="configHash">Hash of the configuration that produced the result, for staleness detection.</param>
@@ -25,6 +26,7 @@ internal static class AnalysisStatusWriter
     public static async Task UpsertAsync(
         SegmentDbContext db,
         Guid itemId,
+        Guid containerId,
         string providerName,
         bool hasResults,
         string? configHash,
@@ -39,6 +41,7 @@ internal static class AnalysisStatusWriter
             db.AnalysisStatuses.Add(new AnalysisStatus
             {
                 ItemId = itemId,
+                ContainerId = containerId,
                 ProviderName = providerName,
                 AnalyzedAt = DateTime.UtcNow,
                 HasResults = hasResults,
@@ -50,5 +53,12 @@ internal static class AnalysisStatusWriter
         existing.AnalyzedAt = DateTime.UtcNow;
         existing.HasResults = hasResults;
         existing.ConfigHash = configHash;
+
+        // Never overwrite a resolved container with an unresolvable one: a transient library
+        // lookup failure would otherwise drop the row out of the analyzed-items listing.
+        if (containerId != Guid.Empty)
+        {
+            existing.ContainerId = containerId;
+        }
     }
 }

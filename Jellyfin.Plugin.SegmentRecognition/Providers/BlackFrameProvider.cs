@@ -144,6 +144,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             await AnalysisStatusWriter.UpsertAsync(
                 dbEmpty,
                 itemId,
+                AnalysisGrouping.GetContainerId(item, itemId),
                 Name,
                 hasResults: false,
                 ConfigHasher.BlackFrameSegments(Plugin.Instance?.Configuration ?? new PluginConfiguration()),
@@ -420,6 +421,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         await AnalysisStatusWriter.UpsertAsync(
             db,
             itemId,
+            AnalysisGrouping.GetContainerId(item, itemId),
             Name,
             segments.Count > 0,
             segmentHash,

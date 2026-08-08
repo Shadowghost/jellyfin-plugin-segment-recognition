@@ -55,6 +55,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         });
 
         serviceCollection.AddHostedService<DatabaseInitializer>();
+        serviceCollection.AddHostedService<AnalysisStatusContainerBackfill>();
 
         serviceCollection.AddSingleton<FfmpegBlackFrameService>();
         serviceCollection.AddSingleton<FfmpegChromaprintService>();
@@ -71,7 +72,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<ChromaprintProvider>());
         serviceCollection.AddSingleton<EdlImportProvider>();
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<EdlImportProvider>());
-
+        serviceCollection.AddSingleton<RecalculationJobService>();
+        serviceCollection.AddSingleton<SegmentDataQueryService>();
         serviceCollection.AddSingleton<IScheduledTask, ImportIntroSkipperDataTask>();
         serviceCollection.AddSingleton<IScheduledTask, AnalyzeSegmentsTask>();
         serviceCollection.AddSingleton<IScheduledTask, ExportEdlTask>();

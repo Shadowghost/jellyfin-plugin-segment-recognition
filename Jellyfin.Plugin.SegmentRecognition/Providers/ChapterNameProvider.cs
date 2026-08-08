@@ -283,6 +283,7 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         await AnalysisStatusWriter.UpsertAsync(
             db,
             itemId,
+            AnalysisGrouping.GetContainerId(item, itemId),
             Name,
             merged.Count > 0,
             configHash,

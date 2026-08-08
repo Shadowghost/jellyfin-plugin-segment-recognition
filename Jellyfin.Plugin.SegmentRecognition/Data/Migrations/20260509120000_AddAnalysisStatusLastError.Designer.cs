@@ -11,14 +11,14 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
 {
     [DbContext(typeof(SegmentDbContext))]
-    [Migration("20260808121236_SurrogateChapterKeyAndRegionOffset")]
-    partial class SurrogateChapterKeyAndRegionOffset
+    [Migration("20260509120000_AddAnalysisStatusLastError")]
+    partial class AddAnalysisStatusLastError
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
 
             modelBuilder.Entity("Jellyfin.Plugin.SegmentRecognition.Data.Entities.AnalysisStatus", b =>
                 {
@@ -32,9 +32,6 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ConfigHash")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("ContainerId")
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("HasResults")
@@ -80,9 +77,14 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
 
             modelBuilder.Entity("Jellyfin.Plugin.SegmentRecognition.Data.Entities.ChapterAnalysisResult", b =>
                 {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SegmentType")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("MatchedChapterName")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ConfigHash")
                         .IsRequired()
@@ -94,25 +96,12 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                     b.Property<long>("EndTicks")
                         .HasColumnType("INTEGER");
 
-                    b.Property<Guid>("ItemId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MatchedChapterName")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("SegmentType")
-                        .HasColumnType("INTEGER");
-
                     b.Property<long>("StartTicks")
                         .HasColumnType("INTEGER");
 
-                    b.HasKey("Id");
+                    b.HasKey("ItemId", "SegmentType", "MatchedChapterName");
 
                     b.HasIndex("ItemId");
-
-                    b.HasIndex("ItemId", "SegmentType", "MatchedChapterName", "StartTicks")
-                        .IsUnique();
 
                     b.ToTable("ChapterAnalysisResults");
                 });
@@ -138,9 +127,6 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                     b.Property<byte[]>("FingerprintData")
                         .IsRequired()
                         .HasColumnType("BLOB");
-
-                    b.Property<long>("RegionStartTicks")
-                        .HasColumnType("INTEGER");
 
                     b.Property<Guid>("SeasonId")
                         .HasColumnType("TEXT");

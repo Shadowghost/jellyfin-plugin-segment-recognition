@@ -178,11 +178,13 @@ public class ImportIntroSkipperDataTask : IScheduledTask
             // Mark all providers as analyzed for this item:
             // - ChapterName with HasResults=true so it serves the imported segments
             // - BlackFrame and Chromaprint with HasResults=false so they don't re-analyze
+            var containerId = AnalysisGrouping.GetContainerId(_libraryManager.GetItemById(itemId), itemId);
             foreach (var providerName in _allProviderNames.Where(pn => !existingStatuses.Contains((itemId, pn))))
             {
                 db.AnalysisStatuses.Add(new AnalysisStatus
                 {
                     ItemId = itemId,
+                    ContainerId = containerId,
                     ProviderName = providerName,
                     AnalyzedAt = DateTime.UtcNow,
                     HasResults = providerName == ProviderNames.ChapterName

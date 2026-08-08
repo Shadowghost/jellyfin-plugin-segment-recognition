@@ -63,10 +63,48 @@ Access from **Dashboard > Plugins > Segment Recognition**.
 
 **Chapter Names** -- Configurable name lists per segment type with word-boundary matching.
 
+## REST API
+
+All endpoints live under `SegmentRecognition/v1` and require an elevated (administrator) token.
+They read and write the plugin's own cache, so they answer questions Jellyfin's segment API cannot:
+what was analyzed, under which configuration, and why a given item has no segment.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET Items` | Analyzed items, rolled up to their container (series), with paging and filters |
+| `GET Items/{itemId}` | Everything cached for one item: per-provider status, segments, fingerprint and black-frame metadata |
+| `GET Items/{itemId}/ProviderSegments` | The segments each provider produced for one item, side by side |
+| `DELETE Items/{itemId}` | Drop all cached analysis for one item |
+| `GET`/`POST HasSegments` | Whether items have segments; POST takes a batch of ids |
+| `GET Segments` | Search stored segments across the library |
+| `GET Providers` | Registered providers and their enabled state |
+| `GET Stats` | Segment and provider counts |
+| `POST Recalculate` | Queue re-analysis for items, seasons, series or libraries |
+| `POST Groups/{groupId}/Rematch` | Re-run the comparison pass for one season without re-fingerprinting, then push the results |
+| `GET Jobs`, `GET Jobs/{jobId}`, `DELETE Jobs/{jobId}` | Inspect and cancel queued work |
+| `GET Jobs/{jobId}/Stream` | Server-sent events for live job progress |
+
+Per-provider status carries `introOutcome` and `outroOutcome`, which say why cross-matching did or
+did not produce a segment. These are separate from `lastError`: an outcome describes a run that
+succeeded and found nothing, whereas `lastError` means the provider threw.
+
+Timestamps are UTC and segment boundaries are exposed in milliseconds rather than ticks.
+
+`GET Items` resolves only the page it returns against the library, not the whole matched set. Under
+the default `name` order the library does the sorting, offsetting, limiting and counting in one
+query; under `lastAnalyzed` the ordering comes from the plugin's own timestamps and the ids are
+checked against the library a window at a time until the page is full. Both orders still count and
+page over the same predicate, so a container whose rows outlived its item is absent from both rather
+than inflating the count and shortening the last page.
+
+A request the client abandons mid-flight answers `499` instead of surfacing as a server error.
+Cancellation is only treated this way when the connection actually went away, so a genuine internal
+failure is still reported as one.
+
 ## Data Storage
 
 Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite, WAL mode):
-- `AnalysisStatuses` -- Which items have been analyzed by which provider, under which config, and why cross-matching did or did not produce an intro/outro
+- `AnalysisStatuses` -- Which items have been analyzed by which provider, under which config, and why cross-matching did or did not produce an intro/outro. Indexed to cover the container roll-up behind `GET Items`, so that listing is answered from the index without touching a table whose pages are interleaved with the fingerprint blobs
 - `ChapterAnalysisResults` -- Segments from chapter matching, black frames, chromaprint, and EDL import, tagged by source
 - `BlackFrameResults` / `CropDetectResults` -- Raw black frame and crop data
 - `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions), each recording the span it covers
