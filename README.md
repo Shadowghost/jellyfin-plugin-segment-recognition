@@ -72,6 +72,12 @@ Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite
 
 Deleting the database forces re-analysis on the next task run.
 
+Connections open the database in **private cache** mode. The analysis task writes from several
+workers while the providers read on the playback path, and WAL is what lets those overlap. SQLite's
+shared-cache mode would replace that with process-wide table-level locks, so a provider read
+arriving during a write would block for the full connection timeout and then fail with
+`SQLITE_LOCKED` -- which, unlike `SQLITE_BUSY`, the busy handler does not retry.
+
 ## Benchmarking
 
 ```bash
