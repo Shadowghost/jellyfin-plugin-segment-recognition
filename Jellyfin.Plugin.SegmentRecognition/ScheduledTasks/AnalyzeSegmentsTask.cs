@@ -245,11 +245,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         _logger.LogInformation(
             "Segment analysis task complete: {ChapterAnalyzed} chapter, {BlackFrameAnalyzed} black frame, "
-            + "{FingerprintsGenerated} fingerprints, {SeasonsAnalyzed} seasons compared, "
+            + "{FingerprintsGenerated} fingerprints ({IntroRetries} re-analyzed over a wider region), "
+            + "{SeasonsAnalyzed} seasons compared, "
             + "{Pushed} items pushed, {PushSkipped} push skipped, {Failed} failed",
             stats.ChapterAnalyzed,
             stats.BlackFrameAnalyzed,
             stats.FingerprintsGenerated,
+            stats.IntroRetries,
             stats.SeasonsAnalyzed,
             stats.Pushed,
             stats.PushSkipped,
@@ -867,12 +869,18 @@ public class AnalyzeSegmentsTask : IScheduledTask
             return false;
         }
 
-        _logger.LogDebug(
-            "Retrying {Count} intro fingerprint(s) over a wider region for {Label}",
+        // Information rather than Debug: this re-runs ffmpeg over a wider region and re-compares
+        // the group, so it is worth seeing why a run took longer than the previous one. It is also
+        // rare - only seasons whose stored intros look wrong reach here, and each item is offered
+        // once - so it does not turn into per-season noise.
+        _logger.LogInformation(
+            "Re-analyzing {Label}: {Count} intro(s) look cut off by the first-pass region, "
+            + "re-fingerprinting them over up to {Seconds:F0}s",
+            seasonLabel,
             candidates.Count,
-            seasonLabel);
+            candidates.Max(c => c.RegionSeconds));
 
-        var regenerated = 0;
+        var regenerated = new List<Guid>();
         foreach (var (itemId, regionSeconds) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -890,7 +898,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
                     itemId, SegmentSourceNames.RegionIntro, cancellationToken, regionSeconds).ConfigureAwait(false);
 
                 stats.IncrementFingerprintsGenerated();
-                regenerated++;
+                regenerated.Add(itemId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -899,10 +907,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
             }
         }
 
-        if (regenerated == 0)
+        if (regenerated.Count == 0)
         {
             return false;
         }
+
+        stats.AddIntroRetries(regenerated.Count);
 
         try
         {
@@ -911,9 +921,34 @@ public class AnalyzeSegmentsTask : IScheduledTask
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Chromaprint re-comparison failed for {Label} ({SeasonId})", seasonLabel, seasonId);
+            return true;
         }
 
+        var matchedNow = await CountIntrosAsync(regenerated, cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Re-analyzed {Label}: {Matched} of {Retried} widened item(s) now have an intro",
+            seasonLabel,
+            matchedNow,
+            regenerated.Count);
+
         return true;
+    }
+
+    /// <summary>
+    /// How many of the given items hold a chromaprint intro.
+    /// </summary>
+    /// <param name="itemIds">The items to count over.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number holding an intro.</returns>
+    private async Task<int> CountIntrosAsync(List<Guid> itemIds, CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        return await db.ChapterAnalysisResults
+            .CountAsync(
+                r => itemIds.Contains(r.ItemId) && r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

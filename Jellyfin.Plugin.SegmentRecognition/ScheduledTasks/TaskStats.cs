@@ -16,6 +16,7 @@ internal sealed class TaskStats
     private int _analysisFailed;
     private int _fingerprintsGenerated;
     private int _seasonsAnalyzed;
+    private int _introRetries;
     private int _pushed;
     private int _pushSkipped;
 
@@ -43,6 +44,9 @@ internal sealed class TaskStats
     /// <summary>Gets the number of groups (seasons) that had chromaprint comparison performed.</summary>
     public int SeasonsAnalyzed => _seasonsAnalyzed;
 
+    /// <summary>Gets the number of intros re-fingerprinted over a wider region and re-compared.</summary>
+    public int IntroRetries => _introRetries;
+
     /// <summary>Gets the number of items whose segments were pushed to Jellyfin.</summary>
     public int Pushed => _pushed;
 
@@ -51,6 +55,10 @@ internal sealed class TaskStats
 
     /// <summary>Gets the total number of analysis operations performed (chapter + black frame + fingerprint).</summary>
     public int TotalWork => _chapterAnalyzed + _blackFrameAnalyzed + _fingerprintsGenerated;
+
+    /// <summary>Adds to the widened-intro retry counter.</summary>
+    /// <param name="count">How many intros were retried.</param>
+    public void AddIntroRetries(int count) => Interlocked.Add(ref _introRetries, count);
 
     /// <summary>Increments the chapter analysis counter.</summary>
     public void IncrementChapterAnalyzed() => Interlocked.Increment(ref _chapterAnalyzed);
