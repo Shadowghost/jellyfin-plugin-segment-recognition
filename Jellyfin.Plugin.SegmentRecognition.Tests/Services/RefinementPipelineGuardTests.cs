@@ -150,4 +150,92 @@ public sealed class RefinementPipelineGuardTests
         Assert.Equal(100 * Second, start);
         Assert.Equal(200 * Second, end);
     }
+
+    /// <summary>
+    /// Checking only for inversion was not enough. Both boundaries move inward independently, so a
+    /// segment that qualified at its window's minimum can survive as a fraction of a second - a
+    /// positive range, and a useless one. On a real library this stored 199 intros below the 5 s
+    /// minimum, the shortest at 0.01 s.
+    /// </summary>
+    [Fact]
+    public async Task RefinementThatShrinksBelowTheMinimum_KeepsOriginalRange()
+    {
+        using var scope = new PluginConfigScope(c =>
+        {
+            c.EnableSilenceRefinement = false;
+            c.EnableChapterSnapping = true;
+            c.ChapterSnapWindowSeconds = 5;
+            c.EnableKeyframeSnapping = false;
+        });
+
+        // Two markers 1.5 s apart inside a 10 s segment: each boundary snaps to its nearer one,
+        // leaving a positive but meaningless range.
+        _chapterManager.GetChapters(_itemId).Returns(new List<ChapterInfo>
+        {
+            new() { Name = "A", StartPositionTicks = 104 * Second },
+            new() { Name = "B", StartPositionTicks = (long)(105.5 * Second) },
+        });
+
+        var (start, end) = await CreatePipeline().RefineAsync(
+            _itemId, 100 * Second, 110 * Second, "/media/test.mkv", null, CancellationToken.None,
+            minDurationSeconds: 5);
+
+        Assert.Equal(100 * Second, start);
+        Assert.Equal(110 * Second, end);
+    }
+
+    /// <summary>
+    /// The floor only rejects; refinement that stays above it still applies.
+    /// </summary>
+    [Fact]
+    public async Task RefinementThatStaysAboveTheMinimum_IsKept()
+    {
+        using var scope = new PluginConfigScope(c =>
+        {
+            c.EnableSilenceRefinement = false;
+            c.EnableChapterSnapping = true;
+            c.ChapterSnapWindowSeconds = 5;
+            c.EnableKeyframeSnapping = false;
+        });
+
+        _chapterManager.GetChapters(_itemId).Returns(new List<ChapterInfo>
+        {
+            new() { Name = "Start", StartPositionTicks = 100 * Second },
+            new() { Name = "End", StartPositionTicks = 200 * Second },
+        });
+
+        var (start, end) = await CreatePipeline().RefineAsync(
+            _itemId, 102 * Second, 198 * Second, "/media/test.mkv", null, CancellationToken.None,
+            minDurationSeconds: 5);
+
+        Assert.Equal(100 * Second, start);
+        Assert.Equal(200 * Second, end);
+    }
+
+    /// <summary>
+    /// Callers that pass no minimum keep the previous behaviour - only inversion is rejected.
+    /// </summary>
+    [Fact]
+    public async Task WithoutAMinimum_ShrinkageIsStillAllowed()
+    {
+        using var scope = new PluginConfigScope(c =>
+        {
+            c.EnableSilenceRefinement = false;
+            c.EnableChapterSnapping = true;
+            c.ChapterSnapWindowSeconds = 5;
+            c.EnableKeyframeSnapping = false;
+        });
+
+        _chapterManager.GetChapters(_itemId).Returns(new List<ChapterInfo>
+        {
+            new() { Name = "A", StartPositionTicks = 104 * Second },
+            new() { Name = "B", StartPositionTicks = (long)(105.5 * Second) },
+        });
+
+        var (start, end) = await CreatePipeline().RefineAsync(
+            _itemId, 100 * Second, 110 * Second, "/media/test.mkv", null, CancellationToken.None);
+
+        Assert.Equal(104 * Second, start);
+        Assert.Equal((long)(105.5 * Second), end);
+    }
 }

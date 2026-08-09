@@ -332,7 +332,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         if (introSegment is not null)
         {
             var (refinedStart, refinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, introSegment.StartTicks, introSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+                itemId,
+                introSegment.StartTicks,
+                introSegment.EndTicks,
+                item.Path,
+                videoCodec,
+                cancellationToken,
+                config.MinIntroDurationSeconds).ConfigureAwait(false);
 
             segments.Add(new ChapterAnalysisResult
             {
@@ -350,7 +356,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         if (outroSegment is not null)
         {
             var (outroRefinedStart, outroRefinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, outroSegment.StartTicks, outroSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+                itemId,
+                outroSegment.StartTicks,
+                outroSegment.EndTicks,
+                item.Path,
+                videoCodec,
+                cancellationToken,
+                config.MinOutroDurationSeconds).ConfigureAwait(false);
 
             // A trailing gap shorter than MinPreviewDurationSeconds is black/silence before EOF
             // rather than a teaser; absorb it so the outro runs to the end instead of leaving a

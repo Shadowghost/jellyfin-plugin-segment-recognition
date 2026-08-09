@@ -401,13 +401,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// </summary>
     /// <param name="groupId">The group identifier (season ID or album ID).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>
-    /// The items that had chromaprint segments before this run and have none after it, because a
-    /// rematch failed or the season-position check discarded what they had. The caller has to push
-    /// these even though they now have nothing to offer: the push is the only thing that clears
-    /// the segment Jellyfin is still serving.
-    /// </returns>
-    public async Task<IReadOnlyCollection<Guid>> AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
@@ -557,13 +552,14 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         if (lostResults.Count > 0)
         {
+            // Worth surfacing on its own: these items keep whatever Jellyfin is already serving
+            // until the task pushes them again, which is why the push gate keys on "analyzed"
+            // rather than "has results".
             _logger.LogDebug(
-                "Chromaprint: {Count} item(s) in group {GroupId} lost their segments and need a push to clear them",
+                "Chromaprint: {Count} item(s) in group {GroupId} lost their segments",
                 lostResults.Count,
                 groupId);
         }
-
-        return lostResults;
     }
 
     /// <summary>
@@ -795,7 +791,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                     bestMatch.EndTicks,
                     item!.Path!,
                     videoCodec,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    minMatchDurationSeconds).ConfigureAwait(false);
 
                 // If this is an outro/credits that ends before the episode's runtime, the
                 // trailing portion is either a real next-episode teaser or just a couple of
