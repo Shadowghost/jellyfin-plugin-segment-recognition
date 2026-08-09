@@ -167,6 +167,26 @@ public sealed class ChromaprintRetryCandidateTests : IDisposable
     }
 
     /// <summary>
+    /// Candidates come from stored rows alone, so a season whose results are entirely up to date
+    /// still yields them. Nothing marks such a season stale, so if this depended on a comparison
+    /// having just run, an intro cut off by the first-pass region would never be found.
+    /// </summary>
+    [Fact]
+    public async Task CandidatesAreVisibleWithoutARecentComparison()
+    {
+        using var _ = new PluginConfigScope();
+
+        await GivenEpisodeAsync(1, 3600, 600, 106);
+        await GivenEpisodeAsync(2, 3600, 600, 106);
+        var suspect = await GivenEpisodeAsync(3, 3600, 600, 33);
+
+        // No AnalyzeGroupAsync call in between - this is the cold path a nightly run takes.
+        var candidates = await CreateProvider().GetIntroRetryCandidatesAsync(_seasonId, CancellationToken.None);
+
+        Assert.Equal(suspect, Assert.Single(candidates).ItemId);
+    }
+
+    /// <summary>
     /// Short media is fingerprinted whole, so the retry width is already covered and there is
     /// nothing wider to try.
     /// </summary>

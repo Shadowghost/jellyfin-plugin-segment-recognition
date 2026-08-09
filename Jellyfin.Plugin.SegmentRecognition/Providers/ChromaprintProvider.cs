@@ -948,6 +948,16 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         foreach (var fingerprint in fingerprints)
         {
+            // Suspicion is decided from rows already in hand; the library lookup that follows only
+            // happens for the few items that fail it, which keeps this affordable on every run.
+            var suspect = !introLengths.TryGetValue(fingerprint.ItemId, out var length)
+                || (longest > 0 && length < longest * SuspectIntroFraction);
+
+            if (!suspect)
+            {
+                continue;
+            }
+
             var runtimeTicks = _libraryManager.GetItemById(fingerprint.ItemId)?.RunTimeTicks ?? 0;
             if (runtimeTicks <= 0)
             {
@@ -955,15 +965,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             }
 
             var retrySeconds = ChromaprintRegions.ForRetry(runtimeTicks / (double)TimeSpan.TicksPerSecond);
-            if (retrySeconds <= fingerprint.AnalysisDurationSeconds + 1)
-            {
-                continue;
-            }
-
-            var suspect = !introLengths.TryGetValue(fingerprint.ItemId, out var length)
-                || (longest > 0 && length < longest * SuspectIntroFraction);
-
-            if (suspect)
+            if (retrySeconds > fingerprint.AnalysisDurationSeconds + 1)
             {
                 candidates.Add((fingerprint.ItemId, retrySeconds));
             }

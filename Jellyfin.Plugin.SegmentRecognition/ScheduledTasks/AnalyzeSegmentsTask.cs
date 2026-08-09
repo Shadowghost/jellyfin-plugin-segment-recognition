@@ -434,8 +434,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 }
             }
 
-            if (ranComparison
-                && await RetryWiderIntrosAsync(seasonId, seasonLabel, stats, cancellationToken).ConfigureAwait(false))
+            // Checked on every run, not only when the comparison just ran. A season whose results
+            // are otherwise up to date is exactly where an intro cut off by the first-pass region
+            // hides, and nothing would ever mark it stale. Cheap when there is nothing to do, and
+            // self-limiting: retried items are not offered again, so this settles instead of
+            // sweeping the library every night.
+            if (await RetryWiderIntrosAsync(seasonId, seasonLabel, stats, cancellationToken).ConfigureAwait(false))
             {
                 anyNewWork = true;
             }
