@@ -302,25 +302,12 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
     /// Joins runs of same-type segments that touch or overlap into one segment.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Chapters are contiguous by construction - each one ends where the next begins - so a title
-    /// sequence split across two chapters produces two segments that abut exactly. A show with an
-    /// "Introduction" chapter followed by an "OP" chapter yielded two Intro segments covering
-    /// 0-140 s and 140-230 s, and a player asking for the intro got two skip targets for one
-    /// opening, or skipped only the first half of it.
-    /// </para>
-    /// <para>
-    /// Only touching or overlapping runs are joined. Same-type segments genuinely recur apart from
-    /// each other - Intro → Commercial → Intro is a real arrangement, and ad breaks repeat all
-    /// through an episode - so a gap means two segments, not one. On a sample library of ~20 000
-    /// chapter-derived segments, 1284 adjacent pairs touched exactly and only two had any gap at
-    /// all, so no tolerance is needed to catch the real cases.
-    /// </para>
-    /// <para>
-    /// A merge that would produce a segment outside its type's duration window is abandoned and
-    /// the parts are kept separate: the window says what a plausible segment looks like, and
-    /// joining must not manufacture something the same validator would have rejected.
-    /// </para>
+    /// Chapters abut exactly, so a title sequence split across an "Introduction" and an "OP"
+    /// chapter became two Intro segments and two skip targets for one opening. Only touching or
+    /// overlapping runs are joined: the same type genuinely recurs apart from itself (ad breaks,
+    /// Intro → Commercial → Intro), and of ~20 000 chapter-derived segments 1284 adjacent pairs
+    /// touched exactly while two had any gap. A join that would breach the type's duration window
+    /// is abandoned rather than manufacturing a segment the validator would have rejected.
     /// </remarks>
     /// <param name="segments">The per-chapter segments for one item.</param>
     /// <param name="config">The plugin configuration.</param>

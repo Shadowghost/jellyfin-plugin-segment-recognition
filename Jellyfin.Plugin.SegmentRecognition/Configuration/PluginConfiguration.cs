@@ -191,20 +191,9 @@ public class PluginConfiguration : BasePluginConfiguration
     public int MaxCommercialDurationSeconds { get; set; } = 180;
 
     /// <summary>
-    /// Gets or sets the percentage of an episode to analyze from the start for intro detection (0.0-1.0).
-    /// </summary>
-    public double IntroAnalysisPercent { get; set; } = 0.25;
-
-    /// <summary>
     /// Gets or sets the duration in seconds from the end of an episode to analyze for outro detection.
     /// </summary>
     public int OutroAnalysisSeconds { get; set; } = 240;
-
-    /// <summary>
-    /// Gets or sets the duration in seconds to analyze for chromaprint fingerprinting.
-    /// Capped to the region determined by IntroAnalysisPercent.
-    /// </summary>
-    public int ChromaprintAnalysisDurationSeconds { get; set; } = 600;
 
     /// <summary>
     /// Gets or sets the sample rate for chromaprint analysis.
@@ -287,11 +276,10 @@ public class PluginConfiguration : BasePluginConfiguration
     public int CreditsAnalysisDurationSeconds { get; set; } = 240;
 
     /// <summary>
-    /// Gets or sets a value indicating whether to probe the actual audio stream duration via ffprobe
-    /// before calculating the credits fingerprint region. Defaults to true: it guards against MKV
-    /// containers whose duration is inflated by subtitle tracks that extend beyond the audio/video,
-    /// which would otherwise make the credits region seek past the end of the audio. Not exposed in
-    /// the UI; the extra ffprobe call is cheap and the correct behaviour for typical libraries.
+    /// Gets or sets a value indicating whether to probe the actual audio stream duration via
+    /// ffprobe before calculating the credits fingerprint region. Guards against MKV containers
+    /// whose duration is inflated by subtitle tracks running past the audio, which would make the
+    /// credits region seek beyond the end of the audio.
     /// </summary>
     public bool ProbeAudioDuration { get; set; } = true;
 

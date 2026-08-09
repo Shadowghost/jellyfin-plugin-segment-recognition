@@ -87,15 +87,12 @@ public class RefinementPipeline
             refinedEnd = keyframeEnd;
         }
 
-        // Final backstop: never hand back a range that is inverted, or shorter than the caller is
-        // willing to store. Each stage snaps the two boundaries independently and both move
-        // inward, so a short segment can be squeezed to nothing even though no single stage is
-        // wrong - silence snapping alone may pull each end 5 s towards the middle. Checking only
-        // for inversion let that through: a segment that qualified at 6 s could be stored at
-        // 0.01 s, which is not a boundary a player can do anything with.
-        //
-        // The raw boundaries already satisfied whatever window admitted the segment, so falling
-        // back to them keeps that guarantee. Refinement is an improvement, not a requirement.
+        // Never hand back an inverted range, or one shorter than the caller will store. Both
+        // boundaries move inward independently - silence snapping alone can pull each end 5 s
+        // towards the middle - so checking only for inversion let a 6 s segment be stored at
+        // 0.01 s. The raw boundaries already satisfied whatever window admitted the segment, so
+        // falling back to them keeps that guarantee; refinement is an improvement, not a
+        // requirement.
         if (refinedStart >= refinedEnd
             || (refinedEnd - refinedStart) < minDurationSeconds * TimeSpan.TicksPerSecond)
         {

@@ -29,17 +29,9 @@ namespace Jellyfin.Plugin.SegmentRecognition.Providers;
 public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 {
     /// <summary>
-    /// Maximum number of counterparts a single item is compared against.
-    /// <para>
-    /// Consensus needs several opinions but not every one: an exhaustive pairwise pass is
-    /// O(N²) per season and each comparison is a full Hamming scan, which on a large season with
-    /// no real match degenerates badly. A handful of counterparts is ample for a majority vote
-    /// and bounds the work at O(N).
-    /// </para>
-    /// <para>
-    /// Which counterparts those are matters as much as how many - see
+    /// How many counterparts an item is compared against. Enough for a majority vote, and bounds
+    /// an otherwise O(N²) pass at O(N). Which ones matters as much as how many - see
     /// <see cref="NeighboursByDistance"/>.
-    /// </para>
     /// </summary>
     private const int MaxCounterpartsPerItem = 8;
 
@@ -58,15 +50,9 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     private const long IntroPositionToleranceTicks = 120 * TimeSpan.TicksPerSecond;
 
     /// <summary>
-    /// The same tolerance for outros, which are measured back from the end of the file.
-    /// <para>
-    /// Much tighter than the intro's, because the two positions are set by different things: an
-    /// intro's offset depends on the cold open, which varies episode to episode, while an outro's
-    /// distance from the end is the length of the credits, which a season keeps fixed. The whole
-    /// outro population also lives inside the last <c>CreditsAnalysisDurationSeconds</c> of the
-    /// file, so the intro's 120 s would span half the searchable window and cluster everything
-    /// together.
-    /// </para>
+    /// The same tolerance for outros, measured back from the end. Much tighter than the intro's:
+    /// credits length is fixed within a season where cold-open length is not, and the whole outro
+    /// population sits inside the last few minutes, so 120 s would cluster everything together.
     /// </summary>
     private const long OutroPositionToleranceTicks = 30 * TimeSpan.TicksPerSecond;
 
@@ -88,6 +74,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// cluster of three out of five is a "majority" that means nothing.
     /// </summary>
     private const int MinSegmentsForSeasonPruning = 6;
+
+    /// <summary>
+    /// An intro shorter than this fraction of the season's longest is treated as a mismatch worth
+    /// retrying. Catches the item that locked onto a short shared ident because its real opening
+    /// lay outside the first-pass region - which reports success, not failure.
+    /// </summary>
+    private const double SuspectIntroFraction = 0.5;
 
     private readonly FfmpegChromaprintService _chromaprintService;
     private readonly ILibraryManager _libraryManager;
@@ -240,8 +233,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// <param name="itemId">The item identifier.</param>
     /// <param name="region">The region to fingerprint ("Intro" or "Credits").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="minRegionSeconds">Widens the intro region to at least this, for a retry.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task GenerateFingerprintAsync(Guid itemId, string region, CancellationToken cancellationToken)
+    public async Task GenerateFingerprintAsync(
+        Guid itemId,
+        string region,
+        CancellationToken cancellationToken,
+        double minRegionSeconds = 0)
     {
         var item = _libraryManager.GetItemById(itemId);
         if (item?.Path is null || (item.RunTimeTicks ?? 0) <= 0)
@@ -271,7 +269,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         // For short media (≤10 minutes), fingerprint the entire file in the Intro region.
         // Skip the Credits region since it would be identical.
-        var isShortMedia = runtimeSeconds <= 600;
+        var isShortMedia = runtimeSeconds <= ChromaprintRegions.ShortMediaSeconds;
 
         if (isShortMedia && string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
         {
@@ -330,9 +328,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         else
         {
             startSeconds = 0;
-            analysisSeconds = Math.Min(
-                runtimeSeconds * config.IntroAnalysisPercent,
-                config.ChromaprintAnalysisDurationSeconds);
+            analysisSeconds = Math.Max(ChromaprintRegions.FirstPass(runtimeSeconds), minRegionSeconds);
         }
 
         var fpData = await _chromaprintService.GenerateFingerprintAsync(
@@ -908,24 +904,84 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     }
 
     /// <summary>
+    /// Items in a group whose intro is worth searching for again over a wider region.
+    /// </summary>
+    /// <remarks>
+    /// Two shapes qualify: no intro at all, and an intro far shorter than the season's longest.
+    /// The second matters as much as the first - an episode whose opening lies past the first-pass
+    /// region often still matches a brief shared ident at the head of the file, which looks like
+    /// success. Items already fingerprinted at the retry width are excluded, so a group with
+    /// genuinely no shared opening settles after one retry instead of re-extracting every run.
+    /// </remarks>
+    /// <param name="groupId">The group identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The items to re-fingerprint, and the region each needs.</returns>
+    public async Task<IReadOnlyList<(Guid ItemId, double RegionSeconds)>> GetIntroRetryCandidatesAsync(
+        Guid groupId,
+        CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        var fingerprints = await db.ChromaprintResults
+            .AsNoTracking()
+            .Where(r => r.SeasonId == groupId && r.Region == SegmentSourceNames.RegionIntro && r.AnalysisDurationSeconds > 0)
+            .Select(r => new { r.ItemId, r.AnalysisDurationSeconds })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (fingerprints.Count == 0)
+        {
+            return [];
+        }
+
+        var itemIds = fingerprints.Select(f => f.ItemId).ToList();
+        var introLengths = (await db.ChapterAnalysisResults
+            .AsNoTracking()
+            .Where(r => itemIds.Contains(r.ItemId) && r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro)
+            .Select(r => new { r.ItemId, Length = r.EndTicks - r.StartTicks })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false))
+            .ToDictionary(r => r.ItemId, r => r.Length);
+
+        var longest = introLengths.Count > 0 ? introLengths.Values.Max() : 0;
+        var candidates = new List<(Guid, double)>();
+
+        foreach (var fingerprint in fingerprints)
+        {
+            var runtimeTicks = _libraryManager.GetItemById(fingerprint.ItemId)?.RunTimeTicks ?? 0;
+            if (runtimeTicks <= 0)
+            {
+                continue;
+            }
+
+            var retrySeconds = ChromaprintRegions.ForRetry(runtimeTicks / (double)TimeSpan.TicksPerSecond);
+            if (retrySeconds <= fingerprint.AnalysisDurationSeconds + 1)
+            {
+                continue;
+            }
+
+            var suspect = !introLengths.TryGetValue(fingerprint.ItemId, out var length)
+                || (longest > 0 && length < longest * SuspectIntroFraction);
+
+            if (suspect)
+            {
+                candidates.Add((fingerprint.ItemId, retrySeconds));
+            }
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
     /// Applies <see cref="SelectSeasonOutliers"/> to the whole season and removes what it flags.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// The population has to span the season, not just the items re-evaluated on this run:
-    /// judging a straggler needs the positions its siblings agreed on, and on an incremental run
-    /// most of those come from rows written earlier. Rows belonging to items already queued for
-    /// deletion are excluded - they are about to be replaced by the entries in
-    /// <paramref name="toAdd"/>, which are counted instead.
-    /// </para>
-    /// <para>
-    /// Intros are positioned from the start of the file and outros from the end, because that is
-    /// what each one is actually anchored to. Runtimes vary widely inside a season - by more than
-    /// 15 minutes in the top decile of the sample library - so measuring a credits sequence from
-    /// the start of the file scatters a season that is in fact perfectly consistent: on that
-    /// library only 57% of seasons showed a dominant outro position start-relative, against 96%
-    /// end-relative.
-    /// </para>
+    /// The population spans the season, not just items re-evaluated this run: judging a straggler
+    /// needs the positions its siblings agreed on, most of which come from earlier rows. Items
+    /// queued for deletion are excluded, since <paramref name="toAdd"/> replaces them.
+    /// Intros are measured from the start and outros from the end, because that is what each is
+    /// anchored to - runtimes vary by over 15 minutes within a season in the top decile, and
+    /// measuring credits from the start dropped seasons with a dominant position from 96% to 57%.
     /// </remarks>
     private void PruneSeasonOutliers(
         string matchedChapterName,
@@ -1009,27 +1065,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// Picks the segments in a season that sit at a position essentially no other episode shares.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// An episode that has no intro of its own can still produce one: with nothing at the front to
-    /// lock onto, the matcher falls through to whatever incidental music cue it happens to share
-    /// with a sibling, and a cue corroborated by two counterparts passes consensus. Those land at
-    /// arbitrary positions - 217 s, 490 s, 503 s in a season where seventeen episodes agree on 0 s.
-    /// </para>
-    /// <para>
-    /// The test is deliberately <em>not</em> distance from the season's average position. Seasons
-    /// legitimately carry several intro positions, because the cold open before the titles varies:
-    /// one 197-episode arc in the sample library splits 141 episodes at 0 s, 41 at 196 s and 15 at
-    /// 271 s, all correct. Rejecting on distance would have discarded 56 good intros there. What
-    /// separates a format variant from noise is not where it sits but how many episodes
-    /// independently landed on it, so this clusters the season's positions and drops only the
-    /// clusters too small to be a variant.
-    /// </para>
-    /// <para>
-    /// Pruning is skipped entirely unless one cluster holds a clear majority of the season. Without
-    /// a dominant position there is no established format for a straggler to be a straggler
-    /// <em>from</em> - the season's matching is simply unreliable, and guessing which scattered
-    /// results are wrong would remove as many good ones as bad.
-    /// </para>
+    /// Deliberately not distance from the season's average: seasons legitimately carry several
+    /// positions, since the cold open varies. One 197-episode arc splits 141/41/15 across three,
+    /// all correct, and a distance rule would have discarded 56 good intros there. What separates
+    /// a format variant from noise is how many episodes independently landed on it, so this
+    /// clusters positions and drops only clusters too small to be a variant. Skipped entirely
+    /// unless one cluster holds a clear majority - without a dominant position there is nothing to
+    /// be a straggler from, and guessing would remove as many good results as bad.
     /// </remarks>
     /// <param name="population">
     /// Every segment of this kind in the season, as (item, position). The position is measured in
@@ -1133,19 +1175,11 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// alternating below/above so both directions are sampled evenly.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Counterparts used to be taken as simply the first <see cref="MaxCounterpartsPerItem"/> rows
-    /// of the group. A season whose opening changes partway through - split-cour anime, a
-    /// mid-season rebrand - contains two disjoint sets of episodes that share an OP, and under
-    /// that rule every episode past the eighth was only ever compared against the head of the
-    /// season. The only audio the two halves have in common is whatever is glued to the front of
-    /// every file (a distributor ident), so the second half's intro collapsed onto that instead of
-    /// its actual opening.
-    /// </para>
-    /// <para>
-    /// Walking outwards from each item keeps the comparison inside the run of episodes most likely
-    /// to share an opening, and costs nothing extra: the same number of pairs are compared.
-    /// </para>
+    /// Taking the first N rows instead meant every episode past the Nth was only ever compared
+    /// against the head of the season. Where the opening changes partway through - split-cour
+    /// anime, a mid-season rebrand - the two halves share only the ident at the front of every
+    /// file, so the second half collapsed onto that. Walking outwards keeps comparisons inside the
+    /// run of episodes likely to share an opening, for the same number of pairs.
     /// </remarks>
     /// <param name="index">The index to walk outwards from.</param>
     /// <param name="count">The number of items in the list.</param>

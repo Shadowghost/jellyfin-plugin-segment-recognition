@@ -55,8 +55,16 @@ public static class ConfigHasher
     private const int DefaultChromaprintSampleRate = 22050;
 
     /// <summary>
-    /// Hash of the config values that affect chromaprint fingerprint generation for the Intro region.
+    /// Hash of the settings that affect intro-region fingerprint generation.
     /// </summary>
+    /// <remarks>
+    /// The region bounds are code constants rather than config values now, and how much of an item
+    /// is covered is tracked per fingerprint instead (see the region check in the analysis task).
+    /// They are still hashed, at the values they have always had, so that existing fingerprints
+    /// stay valid - dropping them from the input would change every hash and re-extract the whole
+    /// library to record something that has not changed. Same reasoning as
+    /// <see cref="SampleRateFragment"/>.
+    /// </remarks>
     /// <param name="config">The plugin configuration.</param>
     /// <returns>A 16-character hex hash string.</returns>
     public static string ChromaprintIntro(PluginConfiguration config)
@@ -65,7 +73,7 @@ public static class ConfigHasher
 
         var input = string.Create(
             CultureInfo.InvariantCulture,
-            $"cp-intro|iap={config.IntroAnalysisPercent}|cads={config.ChromaprintAnalysisDurationSeconds}{SampleRateFragment(config)}");
+            $"cp-intro|iap={ChromaprintRegions.IntroFraction}|cads={ChromaprintRegions.MaxIntroSeconds:F0}{SampleRateFragment(config)}");
         return ComputeHash(WithFingerprintVersion(input));
     }
 
@@ -193,7 +201,7 @@ public static class ConfigHasher
             $"bf-seg|mind={config.BlackFrameMinDurationMs}"
             + $"|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}"
             + $"|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}|maxMO={config.MaxMovieOutroDurationSeconds}"
-            + $"|iap={config.IntroAnalysisPercent}|oas={config.OutroAnalysisSeconds}"
+            + $"|iap={ChromaprintRegions.IntroFraction}|oas={config.OutroAnalysisSeconds}"
             + $"|epi={config.EnablePreviewInference}|minP={config.MinPreviewDurationSeconds}|maxP={config.MaxPreviewDurationSeconds}"
             + $"{RefinementFragment(config)}");
         return ComputeHash(input);

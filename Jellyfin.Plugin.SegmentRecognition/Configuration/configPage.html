@@ -311,12 +311,7 @@
                                 </div>
 
                                 <fieldset class="verticalSection">
-                                    <legend>Analysis Regions</legend>
-                                    <div class="inputContainer">
-                                        <label class="inputLabel" for="txtIntroAnalysisPercent">Intro Analysis Region (%)</label>
-                                        <input id="txtIntroAnalysisPercent" type="number" is="emby-input" min="1" max="100" step="1" />
-                                        <div class="fieldDescription">Percentage of the episode to scan from the start for intro detection (default: 25%).</div>
-                                    </div>
+                                    <legend>Analysis Region</legend>
                                     <div class="inputContainer">
                                         <label class="inputLabel" for="txtOutroAnalysisSeconds">Outro Analysis Region (seconds)</label>
                                         <input id="txtOutroAnalysisSeconds" type="number" is="emby-input" min="30" step="10" />
@@ -547,11 +542,6 @@
                                 <fieldset class="verticalSection">
                                     <legend>Matching</legend>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtChromaprintAnalysisDuration">Max Analysis Duration (seconds)</label>
-                                        <input id="txtChromaprintAnalysisDuration" type="number" is="emby-input" min="10" step="10" />
-                                        <div class="fieldDescription">Maximum duration to fingerprint (capped to the intro analysis region).</div>
-                                    </div>
-                                    <div class="inputContainer">
                                         <label class="inputLabel" for="txtChromaprintSampleRate">Sample Rate (Hz)</label>
                                         <input id="txtChromaprintSampleRate" type="number" is="emby-input" min="8000" max="48000" step="1" />
                                         <div class="fieldDescription">Audio sample rate used for fingerprinting (default: 22050). Changing this regenerates every fingerprint.</div>
@@ -779,7 +769,6 @@
                         document.getElementById('txtMaxMovieOutroDuration').value = config.MaxMovieOutroDurationSeconds;
                         document.getElementById('txtMinCommercialDuration').value = config.MinCommercialDurationSeconds;
                         document.getElementById('txtMaxCommercialDuration').value = config.MaxCommercialDurationSeconds;
-                        document.getElementById('txtIntroAnalysisPercent').value = Math.round(config.IntroAnalysisPercent * 100);
                         document.getElementById('txtOutroAnalysisSeconds').value = config.OutroAnalysisSeconds;
                         document.getElementById('chkEnableSilenceRefinement').checked = config.EnableSilenceRefinement;
                         document.getElementById('txtSilenceDetectNoisedB').value = config.SilenceDetectNoisedB;
@@ -793,7 +782,6 @@
                         srLoadListEditor('RecapChapterNames', config.RecapChapterNames);
                         srLoadListEditor('PreviewChapterNames', config.PreviewChapterNames);
                         srLoadListEditor('CommercialChapterNames', config.CommercialChapterNames);
-                        document.getElementById('txtChromaprintAnalysisDuration').value = config.ChromaprintAnalysisDurationSeconds;
                         document.getElementById('txtChromaprintSampleRate').value = config.ChromaprintSampleRate;
                         document.getElementById('txtChromaprintMaxBitErrors').value = config.ChromaprintMaxBitErrors;
                         document.getElementById('txtChromaprintMaxTimeSkip').value = config.ChromaprintMaxTimeSkipSeconds;
@@ -846,7 +834,6 @@
                         config.MaxMovieOutroDurationSeconds = parseInt(document.getElementById('txtMaxMovieOutroDuration').value, 10);
                         config.MinCommercialDurationSeconds = parseInt(document.getElementById('txtMinCommercialDuration').value, 10);
                         config.MaxCommercialDurationSeconds = parseInt(document.getElementById('txtMaxCommercialDuration').value, 10);
-                        config.IntroAnalysisPercent = parseInt(document.getElementById('txtIntroAnalysisPercent').value, 10) / 100.0;
                         config.OutroAnalysisSeconds = parseInt(document.getElementById('txtOutroAnalysisSeconds').value, 10);
                         config.EnableSilenceRefinement = document.getElementById('chkEnableSilenceRefinement').checked;
                         config.SilenceDetectNoisedB = parseInt(document.getElementById('txtSilenceDetectNoisedB').value, 10);
@@ -868,7 +855,6 @@
                         config.RecapChapterNames = srGetListEditorValues('RecapChapterNames');
                         config.PreviewChapterNames = srGetListEditorValues('PreviewChapterNames');
                         config.CommercialChapterNames = srGetListEditorValues('CommercialChapterNames');
-                        config.ChromaprintAnalysisDurationSeconds = parseInt(document.getElementById('txtChromaprintAnalysisDuration').value, 10);
                         ApiClient.updatePluginConfiguration(SegmentRecognitionPluginConfig.pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
                     });
                 });

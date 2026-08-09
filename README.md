@@ -7,6 +7,7 @@ A Jellyfin plugin that automatically detects and manages media segments (intros,
 - **Chapter Name Matching** -- Identifies segments by matching chapter names against configurable patterns. Supports multiple languages. Chapters are contiguous, so a title sequence split across an "Introduction" and an "OP" chapter would otherwise yield two adjacent Intro segments and two skip targets for one opening; touching same-type segments are joined into one, unless the join would breach the type's duration window.
 - **Black Frame Detection** -- Detects black frame clusters at intro/outro boundaries using ffmpeg. Hardware-accelerated decoding with GPU-side downscaling (480p default). Automatic letterbox crop detection. Supports episodes and movies.
 - **Chromaprint Audio Fingerprinting** -- Compares audio fingerprints across episodes in a season to find shared intro and credits sequences. Separate intro and credits region fingerprinting. Each episode is compared against its nearest neighbours in episode order, so a season that changes its opening partway through (split-cour anime, a mid-season rebrand) still matches within each run of episodes instead of collapsing onto whatever the two halves have in common.
+- **Adaptive Intro Search** -- The intro region scanned on the first pass covers 99% of openings. When a season says otherwise -- an episode with no intro, or one that matched something far shorter than its siblings -- those episodes are re-fingerprinted over the first half of the file and compared again. This finds openings that sit fifteen minutes into a long-form drama without scanning that far for every item. Fingerprints record the span they cover, so widening never re-extracts what is already wide enough, and an episode that simply has no shared opening settles after one retry.
 - **Out-of-Place Segment Pruning** -- An episode that has no intro of its own can still match an incidental music cue it shares with a sibling, producing a segment at an arbitrary position. Segments that sit where almost no other episode in the season has one are discarded -- intros measured from the start of the file, outros from the end. Seasons with no dominant position are left untouched, so shows whose placement genuinely varies are unaffected.
 - **Match Outcome Reporting** -- When cross-matching produces nothing, the reason is recorded per item and region (`NoSharedAudio`, `NoConsensus`, `OutsideWindow`, `NoComparableCounterparts`, `SeasonOutlier`), so "this episode has no intro" is distinguishable from "this episode was never analyzed".
 - **Preview Inference** -- Optionally detects preview/next-episode teasers after credits.
@@ -54,11 +55,11 @@ Access from **Dashboard > Plugins > Segment Recognition**.
 
 **Black Frame** -- Analysis resolution (480p/720p/native), black threshold (90%), minimum cluster duration (500ms), re-analyze flag, automatic letterbox detection.
 
-**Analysis Regions** -- Intro region (25% from start), outro region (240s from end).
+**Analysis Region** -- Outro region for black-frame detection (240s from end). The chromaprint intro region is not configurable: it adapts per season (see Adaptive Intro Search).
 
 **Refinement** -- Silence snapping (noise floor, min duration, asymmetric windows), chapter snapping (5.0s window), keyframe snapping (3.0s window). All enabled by default.
 
-**Chromaprint** -- Max analysis duration (600s), sample rate (22050 Hz), max bit errors (6), max time skip (3.5s), index fuzz (2). Minimum match length comes from the intro/outro duration minimums.
+**Chromaprint** -- Sample rate (22050 Hz), max bit errors (6), max time skip (3.5s), index fuzz (2), credits region (240s from end). Minimum match length comes from the intro/outro duration minimums.
 
 **Chapter Names** -- Configurable name lists per segment type with word-boundary matching.
 
@@ -68,7 +69,7 @@ Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite
 - `AnalysisStatuses` -- Which items have been analyzed by which provider, under which config, and why cross-matching did or did not produce an intro/outro
 - `ChapterAnalysisResults` -- Segments from chapter matching, black frames, chromaprint, and EDL import, tagged by source
 - `BlackFrameResults` / `CropDetectResults` -- Raw black frame and crop data
-- `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions)
+- `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions), each recording the span it covers
 
 Deleting the database forces re-analysis on the next task run.
 

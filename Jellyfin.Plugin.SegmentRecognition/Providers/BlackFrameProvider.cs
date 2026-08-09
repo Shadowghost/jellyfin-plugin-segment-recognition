@@ -437,7 +437,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
     internal static double IntroScanSeconds(double runtimeSeconds, PluginConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);
-        return Math.Min(runtimeSeconds * config.IntroAnalysisPercent, config.MaxIntroDurationSeconds * 2.0);
+        return Math.Min(runtimeSeconds * ChromaprintRegions.IntroFraction, config.MaxIntroDurationSeconds * 2.0);
     }
 
     /// <summary>
