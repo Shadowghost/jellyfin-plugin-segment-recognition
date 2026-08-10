@@ -810,8 +810,10 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 ? stored
                 : 0;
 
+            // A zero-width row is the sentinel for "extraction yielded nothing"; it is final, so it
+            // is never stale on width grounds.
             if (string.Equals(existingHash, expectedHash, StringComparison.Ordinal)
-                && wantedRegion <= storedRegion + 1)
+                && (storedRegion == 0 || wantedRegion <= storedRegion + 1))
             {
                 return;
             }
@@ -822,21 +824,14 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 item.Name,
                 storedRegion,
                 wantedRegion);
-
-            // Config changed: drop the stale row so GenerateFingerprintAsync (which skips items
-            // that already have a row) will regenerate it. This is the only path that needs a DB
-            // context here.
-            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-            await db.ChromaprintResults
-                .Where(r => r.ItemId == item.Id && r.Region == region)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
         }
 
         _logger.LogDebug("Generating chromaprint {Region} fingerprint for \"{ItemName}\" ({Path})", region, item.Name, item.Path);
         try
         {
-            await _chromaprintProvider.GenerateFingerprintAsync(item.Id, region, cancellationToken).ConfigureAwait(false);
+            await _chromaprintProvider
+                .GenerateFingerprintAsync(item.Id, region, cancellationToken, WantedRegionSeconds(item, region))
+                .ConfigureAwait(false);
             stats.IncrementFingerprintsGenerated();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -886,14 +881,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                using (var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    await db.ChromaprintResults
-                        .Where(r => r.ItemId == itemId && r.Region == SegmentSourceNames.RegionIntro)
-                        .ExecuteDeleteAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
+                // No delete first: the provider replaces the row itself, once the new fingerprint
+                // exists. A failure here leaves the narrower one in place rather than nothing.
                 await _chromaprintProvider.GenerateFingerprintAsync(
                     itemId, SegmentSourceNames.RegionIntro, cancellationToken, regionSeconds).ConfigureAwait(false);
 
