@@ -40,7 +40,7 @@ public class FfmpegChromaprintService
     /// <param name="durationSeconds">Duration to analyze in seconds.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Raw fingerprint bytes, or empty array if generation failed.</returns>
-    public async Task<byte[]> GenerateFingerprintAsync(
+    public virtual async Task<byte[]> GenerateFingerprintAsync(
         string filePath,
         int sampleRate,
         double startSeconds,

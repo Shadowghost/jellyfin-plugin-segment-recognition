@@ -253,31 +253,45 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             return;
         }
 
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var isCreditsRegion = string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal);
+        var configHash = isCreditsRegion
+            ? ConfigHasher.ChromaprintCredits(config)
+            : ConfigHasher.ChromaprintIntro(config);
+
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        var existing = await db.ChromaprintResults
-            .AnyAsync(r => r.ItemId == itemId && r.Region == region, cancellationToken)
+        var stored = await db.ChromaprintResults
+            .Where(r => r.ItemId == itemId && r.Region == region)
+            .Select(r => new { r.AnalysisDurationSeconds, r.ConfigHash })
+            .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        if (existing)
+        // Keep what is there when it was produced under this configuration and reaches at least as
+        // far as asked. Judging both here rather than in the caller is what lets the caller stop
+        // deleting the row up front to force a rebuild. A zero-width row is the sentinel written
+        // when extraction yielded nothing; it is final, and comparing it on width would re-run
+        // ffmpeg against an item with no usable audio on every pass.
+        var covered = stored is null ? (int?)null : stored.AnalysisDurationSeconds;
+        if (stored is not null
+            && string.Equals(stored.ConfigHash, configHash, StringComparison.Ordinal)
+            && (stored.AnalysisDurationSeconds == 0 || stored.AnalysisDurationSeconds + 1 >= minRegionSeconds))
         {
             return;
         }
 
-        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
         var runtimeSeconds = item.RunTimeTicks!.Value / (double)TimeSpan.TicksPerSecond;
 
         // For short media (≤10 minutes), fingerprint the entire file in the Intro region.
         // Skip the Credits region since it would be identical.
         var isShortMedia = runtimeSeconds <= ChromaprintRegions.ShortMediaSeconds;
 
-        if (isShortMedia && string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
+        if (isShortMedia && isCreditsRegion)
         {
             _logger.LogDebug("Skipping credits fingerprint for short media ({Duration:F0}s) item {ItemId}", runtimeSeconds, itemId);
 
             // Store an empty sentinel so the task knows this was intentionally skipped
             // and doesn't retry on every run.
-            var creditsHash = ConfigHasher.ChromaprintCredits(config);
             db.ChromaprintResults.Add(new ChromaprintResult
             {
                 ItemId = itemId,
@@ -286,11 +300,11 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 FingerprintData = [],
                 AnalysisDurationSeconds = 0,
                 RegionStartTicks = 0,
-                ConfigHash = creditsHash,
+                ConfigHash = configHash,
                 CreatedAt = DateTime.UtcNow
             });
 
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await StoreAsync().ConfigureAwait(false);
             return;
         }
 
@@ -302,7 +316,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             startSeconds = 0;
             analysisSeconds = runtimeSeconds;
         }
-        else if (string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
+        else if (isCreditsRegion)
         {
             // MKV containers can report a duration based on the longest stream (e.g. subtitles
             // that extend far beyond the actual audio/video). When enabled, probe the actual audio
@@ -338,15 +352,23 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             analysisSeconds,
             cancellationToken).ConfigureAwait(false);
 
-        var configHash = string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal)
-            ? ConfigHasher.ChromaprintCredits(config)
-            : ConfigHasher.ChromaprintIntro(config);
-
         if (fpData.Length == 0)
         {
+            if (covered > 0)
+            {
+                _logger.LogWarning(
+                    "Chromaprint {Region} fingerprinting produced no data for \"{ItemName}\" ({Path}), "
+                    + "keeping the existing {Covered}s fingerprint",
+                    region,
+                    item.Name,
+                    item.Path,
+                    covered);
+                return;
+            }
+
             _logger.LogDebug("Chromaprint: fingerprinting produced no data for \"{ItemName}\" ({Path}) [{Region}]", item.Name, item.Path, region);
 
-            // Store an empty sentinel so the task doesn't retry on every run.
+            // Nothing to lose, so record the sentinel so the task doesn't retry on every run.
             db.ChromaprintResults.Add(new ChromaprintResult
             {
                 ItemId = itemId,
@@ -359,7 +381,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 CreatedAt = DateTime.UtcNow
             });
 
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await StoreAsync().ConfigureAwait(false);
             return;
         }
 
@@ -380,7 +402,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             CreatedAt = DateTime.UtcNow
         });
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await StoreAsync().ConfigureAwait(false);
 
         _logger.LogDebug(
             "Chromaprint: generated {Region} fingerprint ({Bytes} bytes) for \"{ItemName}\" ({Path})",
@@ -388,6 +410,27 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             fpData.Length,
             item.Name,
             item.Path);
+
+        // Replaces any existing row in one transaction. Every caller reaches here only after the
+        // ffmpeg work has produced usable data, so a regeneration cannot leave the item with no
+        // fingerprint: deleting up front meant a failed re-extraction destroyed a usable one.
+        async Task StoreAsync()
+        {
+            // Delete unconditionally rather than only when a row was seen earlier. Whether one
+            // existed was read before an ffmpeg run that can take minutes, and the scheduled task
+            // does not take the per-item lock the Recalculate endpoint uses - so a row written
+            // meanwhile turned the insert into a primary-key violation on (ItemId, Region). The
+            // extra statement costs nothing next to the extraction it follows.
+            using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+            await db.ChromaprintResults
+                .Where(r => r.ItemId == itemId && r.Region == region)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
