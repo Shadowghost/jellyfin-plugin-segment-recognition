@@ -35,8 +35,10 @@ public static class ConfigHasher
     /// <para>
     /// v4: season position clusters chain on the previous member rather than the first, so a
     /// season whose cold open varies continuously is no longer split into pieces with its tail
-    /// pruned. Bumped so the intros v3 discarded are recomputed - a prune deletes the segment, so
-    /// nothing else would bring it back.
+    /// pruned; and outros are positioned against the end of the fingerprinted audio rather than the
+    /// container runtime, which mixed coordinates on files whose duration outruns their audio.
+    /// Bumped so the segments v3 discarded are recomputed - a prune deletes the segment, so nothing
+    /// else would bring it back.
     /// </para>
     /// </summary>
     private const int ChromaprintComparisonAlgoVersion = 4;
