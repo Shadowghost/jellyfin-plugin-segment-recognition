@@ -136,13 +136,23 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     public async Task CleanupExtractedData(Guid itemId, CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        db.ChromaprintResults.RemoveRange(
-            db.ChromaprintResults.Where(r => r.ItemId == itemId));
-        db.AnalysisStatuses.RemoveRange(
-            db.AnalysisStatuses.Where(s => s.ItemId == itemId && s.ProviderName == Name));
+        await db.ChromaprintResults
+            .Where(r => r.ItemId == itemId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.ChapterAnalysisResults
+            .Where(r => r.ItemId == itemId
+                && SegmentSourceNames.ChromaprintOwned.Contains(r.MatchedChapterName))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.AnalysisStatuses
+            .Where(s => s.ItemId == itemId && s.ProviderName == Name)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
