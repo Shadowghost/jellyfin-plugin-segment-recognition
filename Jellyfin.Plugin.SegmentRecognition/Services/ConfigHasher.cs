@@ -32,8 +32,14 @@ public static class ConfigHasher
     /// and intros/outros are pruned against the season's clustered positions (the thresholds that
     /// rule uses are code constants; only its on/off switch is a config value).
     /// </para>
+    /// <para>
+    /// v4: season position clusters chain on the previous member rather than the first, so a
+    /// season whose cold open varies continuously is no longer split into pieces with its tail
+    /// pruned. Bumped so the intros v3 discarded are recomputed - a prune deletes the segment, so
+    /// nothing else would bring it back.
+    /// </para>
     /// </summary>
-    private const int ChromaprintComparisonAlgoVersion = 3;
+    private const int ChromaprintComparisonAlgoVersion = 4;
 
     /// <summary>
     /// Version of the chromaprint fingerprint-generation algorithm, mixed into

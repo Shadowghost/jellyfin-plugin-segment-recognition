@@ -1094,12 +1094,17 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         var ordered = population.OrderBy(p => p.PositionTicks).ToList();
 
-        // Greedy chaining against each cluster's first member, matching SelectConsensusRegion.
+        // Chained against each cluster's *previous* member, not its first. Where the cold open
+        // varies continuously the positions form a run rather than tight groups - one season
+        // spreads its intros over 22s..292s with no consecutive gap above 93s - and anchoring on
+        // the first member chops that run into pieces, leaving the tail as a singleton to be
+        // pruned. Anchoring on the previous member keeps a continuum whole. Genuinely isolated
+        // positions are unaffected: they are far from every member, not just the first.
         var clusters = new List<List<(Guid ItemId, long PositionTicks)>>();
         var current = new List<(Guid ItemId, long PositionTicks)> { ordered[0] };
         for (int i = 1; i < ordered.Count; i++)
         {
-            if (ordered[i].PositionTicks - current[0].PositionTicks <= toleranceTicks)
+            if (ordered[i].PositionTicks - current[^1].PositionTicks <= toleranceTicks)
             {
                 current.Add(ordered[i]);
                 continue;

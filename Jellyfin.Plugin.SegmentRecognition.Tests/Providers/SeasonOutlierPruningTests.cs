@@ -111,6 +111,38 @@ public sealed class SeasonOutlierPruningTests
     }
 
     /// <summary>
+    /// A real season whose cold open varies continuously: intros run from 22s to 292s with no
+    /// consecutive gap above 93s, all correct.
+    /// </summary>
+    /// <remarks>
+    /// Chaining each candidate against the cluster's <em>first</em> member split this run into
+    /// 6/3/1 and pruned the 292s episode, whose intro is genuinely there and only 93s from its
+    /// nearest neighbour - well inside the tolerance it was supposedly judged by. Chaining against
+    /// the previous member keeps the run whole.
+    /// </remarks>
+    [Fact]
+    public void ContinuousSpreadOfPositions_IsNotFragmented()
+    {
+        var season = Season(
+            (1, 22), (1, 45), (1, 57), (1, 79), (1, 95),
+            (1, 139), (1, 152), (1, 161), (1, 199), (1, 292));
+
+        Assert.Empty(ChromaprintProvider.SelectSeasonOutliers(season, IntroTolerance));
+    }
+
+    /// <summary>
+    /// The looser chaining must not shelter a genuine outlier: one that sits beyond the tolerance
+    /// from every member, not merely from the first, is still dropped.
+    /// </summary>
+    [Fact]
+    public void GapWiderThanToleranceStillSeparates()
+    {
+        var season = Season((1, 22), (1, 45), (1, 57), (1, 79), (1, 95), (1, 139), (1, 400));
+
+        Assert.Single(ChromaprintProvider.SelectSeasonOutliers(season, IntroTolerance));
+    }
+
+    /// <summary>
     /// A short season carries too little evidence: three of five agreeing is a "majority" that
     /// means nothing.
     /// </summary>
@@ -176,8 +208,8 @@ public sealed class SeasonOutlierPruningTests
 
     /// <summary>
     /// The outro tolerance has to be much tighter than the intro's. The whole outro population
-    /// lives inside the last few minutes of the file, so at the intro's 120 s the stragglers get
-    /// absorbed into the dominant cluster instead of being seen: here it finds one of the three.
+    /// lives inside the last few minutes of the file, so at the intro's 120 s every straggler
+    /// chains into the dominant cluster and none is seen at all.
     /// </summary>
     [Fact]
     public void IntroToleranceWouldBeTooCoarseForOutros()
@@ -185,6 +217,6 @@ public sealed class SeasonOutlierPruningTests
         var season = Season((18, 18), (2, 98), (1, 178));
 
         Assert.Equal(3, ChromaprintProvider.SelectSeasonOutliers(season, OutroTolerance).Count);
-        Assert.Single(ChromaprintProvider.SelectSeasonOutliers(season, IntroTolerance));
+        Assert.Empty(ChromaprintProvider.SelectSeasonOutliers(season, IntroTolerance));
     }
 }
