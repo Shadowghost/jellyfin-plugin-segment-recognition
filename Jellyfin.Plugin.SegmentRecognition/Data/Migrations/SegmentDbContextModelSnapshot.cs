@@ -31,11 +31,20 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                     b.Property<string>("ConfigHash")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid>("ContainerId")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("HasResults")
                         .HasColumnType("INTEGER");
 
                     b.Property<int?>("IntroOutcome")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastErrorAt")
+                        .HasColumnType("TEXT");
 
                     b.Property<int?>("OutroOutcome")
                         .HasColumnType("INTEGER");
@@ -43,6 +52,9 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                     b.HasKey("ItemId", "ProviderName");
 
                     b.HasIndex("ItemId");
+
+                    b.HasIndex("ContainerId", "HasResults", "AnalyzedAt", "ProviderName", "LastError")
+                        .HasDatabaseName("IX_AnalysisStatuses_ContainerRollup");
 
                     b.ToTable("AnalysisStatuses");
                 });

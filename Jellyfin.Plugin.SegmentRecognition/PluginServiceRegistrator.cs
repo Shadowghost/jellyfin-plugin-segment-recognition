@@ -40,13 +40,22 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                 // Microsoft.Data.Sqlite retry on SQLITE_BUSY rather than surfacing it immediately.
                 // WAL is enabled once on the file itself by DatabaseInitializer.
                 Pooling = true,
-                Cache = SqliteCacheMode.Shared,
+
+                // Private, not Shared or Default. Shared-cache mode replaces WAL's reader/writer
+                // concurrency with process-wide table-level locks: a reader arriving while any
+                // write transaction is open blocks for the full DefaultTimeout above and then
+                // fails with SQLITE_LOCKED_SHAREDCACHE, which the busy handler does not retry.
+                // Default is not private - it inherits the process-global shared-cache flag, which
+                // any other component in the Jellyfin process can turn on. Only Private passes
+                // SQLITE_OPEN_PRIVATECACHE and is immune to that.
+                Cache = SqliteCacheMode.Private,
             }.ToString();
 
             options.UseSqlite(connectionString);
         });
 
         serviceCollection.AddHostedService<DatabaseInitializer>();
+        serviceCollection.AddHostedService<AnalysisStatusContainerBackfill>();
 
         serviceCollection.AddSingleton<FfmpegBlackFrameService>();
         serviceCollection.AddSingleton<FfmpegChromaprintService>();
@@ -63,7 +72,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<ChromaprintProvider>());
         serviceCollection.AddSingleton<EdlImportProvider>();
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<EdlImportProvider>());
-
+        serviceCollection.AddSingleton<RecalculationJobService>();
+        serviceCollection.AddSingleton<SegmentDataQueryService>();
         serviceCollection.AddSingleton<IScheduledTask, ImportIntroSkipperDataTask>();
         serviceCollection.AddSingleton<IScheduledTask, AnalyzeSegmentsTask>();
         serviceCollection.AddSingleton<IScheduledTask, ExportEdlTask>();

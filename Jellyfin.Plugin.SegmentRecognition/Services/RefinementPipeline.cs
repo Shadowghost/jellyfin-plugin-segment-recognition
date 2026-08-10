@@ -44,6 +44,11 @@ public class RefinementPipeline
     /// <param name="filePath">Path to the media file.</param>
     /// <param name="videoCodec">The video codec name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="minDurationSeconds">
+    /// Shortest the refined segment is allowed to be. Refinement that would take it below this is
+    /// discarded in favour of the raw boundaries - see the backstop at the end of this method.
+    /// Pass 0 to allow any length.
+    /// </param>
     /// <returns>A tuple of refined (StartTicks, EndTicks).</returns>
     public async Task<(long StartTicks, long EndTicks)> RefineAsync(
         Guid itemId,
@@ -51,7 +56,8 @@ public class RefinementPipeline
         long endTicks,
         string filePath,
         string? videoCodec,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        double minDurationSeconds = 0)
     {
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
@@ -81,10 +87,14 @@ public class RefinementPipeline
             refinedEnd = keyframeEnd;
         }
 
-        // Final backstop: never hand back a zero-length or inverted range. Each stage snaps the
-        // two boundaries independently, so a degenerate result is possible even though no single
-        // stage is wrong; a segment with end <= start is worse than an unrefined one.
-        if (refinedStart >= refinedEnd)
+        // Never hand back an inverted range, or one shorter than the caller will store. Both
+        // boundaries move inward independently - silence snapping alone can pull each end 5 s
+        // towards the middle - so checking only for inversion let a 6 s segment be stored at
+        // 0.01 s. The raw boundaries already satisfied whatever window admitted the segment, so
+        // falling back to them keeps that guarantee; refinement is an improvement, not a
+        // requirement.
+        if (refinedStart >= refinedEnd
+            || (refinedEnd - refinedStart) < minDurationSeconds * TimeSpan.TicksPerSecond)
         {
             return (startTicks, endTicks);
         }

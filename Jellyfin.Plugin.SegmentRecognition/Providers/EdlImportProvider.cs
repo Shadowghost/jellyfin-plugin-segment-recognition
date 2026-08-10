@@ -149,7 +149,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
             if (segments.Count == 0)
             {
                 _logger.LogDebug("No valid segments found in EDL file {Path}", edlPath);
-                UpdateStatus(db, status, request.ItemId, hasResults: false);
+                UpdateStatus(db, status, request.ItemId, AnalysisGrouping.GetContainerId(item, request.ItemId), hasResults: false);
                 await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                 return [];
             }
@@ -169,7 +169,7 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
                 });
             }
 
-            UpdateStatus(db, status, request.ItemId, hasResults: true);
+            UpdateStatus(db, status, request.ItemId, AnalysisGrouping.GetContainerId(item, request.ItemId), hasResults: true);
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return segments;
         }
@@ -413,18 +413,23 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
         }).ToList();
     }
 
-    private void UpdateStatus(SegmentDbContext db, AnalysisStatus? existing, Guid itemId, bool hasResults)
+    private void UpdateStatus(SegmentDbContext db, AnalysisStatus? existing, Guid itemId, Guid containerId, bool hasResults)
     {
         if (existing is not null)
         {
             existing.AnalyzedAt = DateTime.UtcNow;
             existing.HasResults = hasResults;
+            if (containerId != Guid.Empty)
+            {
+                existing.ContainerId = containerId;
+            }
         }
         else
         {
             db.AnalysisStatuses.Add(new AnalysisStatus
             {
                 ItemId = itemId,
+                ContainerId = containerId,
                 ProviderName = Name,
                 AnalyzedAt = DateTime.UtcNow,
                 HasResults = hasResults

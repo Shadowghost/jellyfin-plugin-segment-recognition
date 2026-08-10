@@ -4,15 +4,16 @@ A Jellyfin plugin that automatically detects and manages media segments (intros,
 
 ## Features
 
-- **Chapter Name Matching** -- Identifies segments by matching chapter names against configurable patterns. Supports multiple languages.
+- **Chapter Name Matching** -- Identifies segments by matching chapter names against configurable patterns. Supports multiple languages. Chapters are contiguous, so a title sequence split across an "Introduction" and an "OP" chapter would otherwise yield two adjacent Intro segments and two skip targets for one opening; touching same-type segments are joined into one, unless the join would breach the type's duration window.
 - **Black Frame Detection** -- Detects black frame clusters at intro/outro boundaries using ffmpeg. Hardware-accelerated decoding with GPU-side downscaling (480p default). Automatic letterbox crop detection. Supports episodes and movies.
 - **Chromaprint Audio Fingerprinting** -- Compares audio fingerprints across episodes in a season to find shared intro and credits sequences. Separate intro and credits region fingerprinting. Each episode is compared against its nearest neighbours in episode order, so a season that changes its opening partway through (split-cour anime, a mid-season rebrand) still matches within each run of episodes instead of collapsing onto whatever the two halves have in common.
-- **Out-of-Place Segment Pruning** -- An episode that has no intro of its own can still match an incidental music cue it shares with a sibling, producing a segment at an arbitrary position. Segments that sit where almost no other episode in the season has one are discarded -- intros measured from the start of the file, outros from the end. Seasons with no dominant position are left untouched, so shows whose placement genuinely varies are unaffected.
+- **Adaptive Intro Search** -- The intro region scanned on the first pass covers 99% of openings. When a season says otherwise -- an episode with no intro, or one that matched something far shorter than its siblings -- those episodes are re-fingerprinted over the first half of the file and compared again. This is checked on every run rather than only when a season is otherwise stale, since a season with a cut-off intro looks up to date. This finds openings that sit fifteen minutes into a long-form drama without scanning that far for every item. Fingerprints record the span they cover, so widening never re-extracts what is already wide enough, and an episode that simply has no shared opening settles after one retry.
+- **Out-of-Place Segment Pruning** -- An episode that has no intro of its own can still match an incidental music cue it shares with a sibling, producing a segment at an arbitrary position. Segments that sit where almost no other episode in the season has one are discarded -- intros measured from the start of the file, outros from the end. Positions are grouped by proximity to their nearest neighbour, so a season whose cold open varies continuously stays one group instead of being split with its tail discarded. Seasons with no dominant position are left untouched, so shows whose placement genuinely varies are unaffected.
 - **Match Outcome Reporting** -- When cross-matching produces nothing, the reason is recorded per item and region (`NoSharedAudio`, `NoConsensus`, `OutsideWindow`, `NoComparableCounterparts`, `SeasonOutlier`), so "this episode has no intro" is distinguishable from "this episode was never analyzed".
 - **Preview Inference** -- Optionally detects preview/next-episode teasers after credits.
-- **Boundary Refinement** -- Snaps detected boundaries to silence gaps (asymmetric windows), chapter markers, and video keyframes for clean skip transitions. Refined boundaries are what gets stored and served.
+- **Boundary Refinement** -- Snaps detected boundaries to silence gaps (asymmetric windows), chapter markers, and video keyframes for clean skip transitions. Refined boundaries are what gets stored and served. Each boundary moves independently, so refinement is discarded in favour of the raw boundaries whenever it would invert a segment or shrink it below the minimum duration that qualified it.
 - **Config Staleness Detection** -- Both results and analysis status store a hash of the configuration that produced them, so items that matched *nothing* are re-analyzed too when settings change. Black-frame analysis splits this in two: changing a clustering threshold or duration window replays from the cached samples, while re-extracting samples (the expensive part) stays behind the explicit `Re-analyze Black Frames` toggle.
-- **Incremental Processing** -- Only analyzes new items and pushes segments for items with new results.
+- **Incremental Processing** -- Only analyzes new items, and pushes every item it has analyzed rather than only those with results. Jellyfin drops a segment when the provider is asked again and returns nothing, so an item that has *lost* its results is precisely the one that must be pushed; gating the push on having results left stale segments in Jellyfin that no later run could clear.
 - **EDL Export/Import** -- Exports segments as Kodi/MPlayer-compatible `.edl` sidecar files. Imports `.edl` files with support for standard 3-column and an extended format with segment type names for lossless round-trips. Exported files carry a generated-by marker so they are never re-imported as a second provider's results, and sidecars the plugin did not write are never overwritten or deleted.
 - **Intro Skipper Import** -- One-time migration from the intro-skipper plugin database.
 
@@ -22,7 +23,7 @@ Analysis is decoupled from segment serving:
 
 1. **Providers are cache-only.** When Jellyfin asks a provider for segments, it reads from the plugin's SQLite database. No ffmpeg, no analysis. Exception: EdlImportProvider parses `.edl` files on query.
 2. **A scheduled task does the heavy lifting.** The `Analyze Segments` task (default: daily at 02:00) iterates all video items in a single pass - chapter name analysis, black frame analysis (with crop detection and hw accel), and chromaprint fingerprint generation.
-3. **Group comparison pass.** Season groups with new fingerprints or stale results are compared against their nearest neighbours in episode order. A region has to be corroborated by more than one counterpart before it is accepted; where several are, the longer one wins, so a short distributor ident at the head of every file never outranks the real opening. The season's results are then checked against each other and positions almost nothing else shares are dropped. Surviving segments pass through the refinement pipeline (silence -> chapter -> keyframe snapping) and are pushed to Jellyfin. Items whose segments were *removed* are pushed too: Jellyfin only drops a segment when the provider is asked again and returns nothing, so skipping them would leave it serving a segment the plugin has already discarded.
+3. **Group comparison pass.** Season groups with new fingerprints or stale results are compared against their nearest neighbours in episode order. A region has to be corroborated by more than one counterpart before it is accepted; where several are, the longer one wins, so a short distributor ident at the head of every file never outranks the real opening. The season's results are then checked against each other and positions almost nothing else shares are dropped. Surviving segments pass through the refinement pipeline (silence -> chapter -> keyframe snapping) and are pushed to Jellyfin. Items whose segments were *removed* are pushed too, since that push is what clears Jellyfin's copy.
 4. **Per-library provider control.** Respects Jellyfin's per-library `DisabledMediaSegmentProviders` setting. ChromaprintProvider only appears for TV show libraries; ChapterName, BlackFrame, and EdlImport appear for any video library.
 
 ## Installation
@@ -54,23 +55,67 @@ Access from **Dashboard > Plugins > Segment Recognition**.
 
 **Black Frame** -- Analysis resolution (480p/720p/native), black threshold (90%), minimum cluster duration (500ms), re-analyze flag, automatic letterbox detection.
 
-**Analysis Regions** -- Intro region (25% from start), outro region (240s from end).
+**Analysis Region** -- Outro region for black-frame detection (240s from end). The chromaprint intro region is not configurable: it adapts per season (see Adaptive Intro Search).
 
 **Refinement** -- Silence snapping (noise floor, min duration, asymmetric windows), chapter snapping (5.0s window), keyframe snapping (3.0s window). All enabled by default.
 
-**Chromaprint** -- Max analysis duration (600s), sample rate (22050 Hz), max bit errors (6), max time skip (3.5s), index fuzz (2). Minimum match length comes from the intro/outro duration minimums.
+**Chromaprint** -- Sample rate (22050 Hz), max bit errors (6), max time skip (3.5s), index fuzz (2), credits region (240s from end). Minimum match length comes from the intro/outro duration minimums.
 
 **Chapter Names** -- Configurable name lists per segment type with word-boundary matching.
+
+## REST API
+
+All endpoints live under `SegmentRecognition/v1` and require an elevated (administrator) token.
+They read and write the plugin's own cache, so they answer questions Jellyfin's segment API cannot:
+what was analyzed, under which configuration, and why a given item has no segment.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET Items` | Analyzed items, rolled up to their container (series), with paging and filters |
+| `GET Items/{itemId}` | Everything cached for one item: per-provider status, segments, fingerprint and black-frame metadata |
+| `GET Items/{itemId}/ProviderSegments` | The segments each provider produced for one item, side by side |
+| `DELETE Items/{itemId}` | Drop all cached analysis for one item |
+| `GET`/`POST HasSegments` | Whether items have segments; POST takes a batch of ids |
+| `GET Segments` | Search stored segments across the library |
+| `GET Providers` | Registered providers and their enabled state |
+| `GET Stats` | Segment and provider counts |
+| `POST Recalculate` | Queue re-analysis for items, seasons, series or libraries |
+| `POST Groups/{groupId}/Rematch` | Re-run the comparison pass for one season without re-fingerprinting, then push the results |
+| `GET Jobs`, `GET Jobs/{jobId}`, `DELETE Jobs/{jobId}` | Inspect and cancel queued work |
+| `GET Jobs/{jobId}/Stream` | Server-sent events for live job progress |
+
+Per-provider status carries `introOutcome` and `outroOutcome`, which say why cross-matching did or
+did not produce a segment. These are separate from `lastError`: an outcome describes a run that
+succeeded and found nothing, whereas `lastError` means the provider threw.
+
+Timestamps are UTC and segment boundaries are exposed in milliseconds rather than ticks.
+
+`GET Items` resolves only the page it returns against the library, not the whole matched set. Under
+the default `name` order the library does the sorting, offsetting, limiting and counting in one
+query; under `lastAnalyzed` the ordering comes from the plugin's own timestamps and the ids are
+checked against the library a window at a time until the page is full. Both orders still count and
+page over the same predicate, so a container whose rows outlived its item is absent from both rather
+than inflating the count and shortening the last page.
+
+A request the client abandons mid-flight answers `499` instead of surfacing as a server error.
+Cancellation is only treated this way when the connection actually went away, so a genuine internal
+failure is still reported as one.
 
 ## Data Storage
 
 Analysis cache in `<jellyfin-data>/data/segment-recognition/segments.db` (SQLite, WAL mode):
-- `AnalysisStatuses` -- Which items have been analyzed by which provider, under which config, and why cross-matching did or did not produce an intro/outro
+- `AnalysisStatuses` -- Which items have been analyzed by which provider, under which config, and why cross-matching did or did not produce an intro/outro. Indexed to cover the container roll-up behind `GET Items`, so that listing is answered from the index without touching a table whose pages are interleaved with the fingerprint blobs
 - `ChapterAnalysisResults` -- Segments from chapter matching, black frames, chromaprint, and EDL import, tagged by source
 - `BlackFrameResults` / `CropDetectResults` -- Raw black frame and crop data
-- `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions)
+- `ChromaprintResults` -- Audio fingerprints per item (intro and credits regions), each recording the span it covers
 
 Deleting the database forces re-analysis on the next task run.
+
+Connections open the database in **private cache** mode. The analysis task writes from several
+workers while the providers read on the playback path, and WAL is what lets those overlap. SQLite's
+shared-cache mode would replace that with process-wide table-level locks, so a provider read
+arriving during a write would block for the full connection timeout and then fail with
+`SQLITE_LOCKED` -- which, unlike `SQLITE_BUSY`, the busy handler does not retry.
 
 ## Benchmarking
 

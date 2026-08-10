@@ -144,6 +144,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             await AnalysisStatusWriter.UpsertAsync(
                 dbEmpty,
                 itemId,
+                AnalysisGrouping.GetContainerId(item, itemId),
                 Name,
                 hasResults: false,
                 ConfigHasher.BlackFrameSegments(Plugin.Instance?.Configuration ?? new PluginConfiguration()),
@@ -332,7 +333,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         if (introSegment is not null)
         {
             var (refinedStart, refinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, introSegment.StartTicks, introSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+                itemId,
+                introSegment.StartTicks,
+                introSegment.EndTicks,
+                item.Path,
+                videoCodec,
+                cancellationToken,
+                config.MinIntroDurationSeconds).ConfigureAwait(false);
 
             segments.Add(new ChapterAnalysisResult
             {
@@ -350,7 +357,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         if (outroSegment is not null)
         {
             var (outroRefinedStart, outroRefinedEnd) = await _refinementPipeline.RefineAsync(
-                itemId, outroSegment.StartTicks, outroSegment.EndTicks, item.Path, videoCodec, cancellationToken).ConfigureAwait(false);
+                itemId,
+                outroSegment.StartTicks,
+                outroSegment.EndTicks,
+                item.Path,
+                videoCodec,
+                cancellationToken,
+                config.MinOutroDurationSeconds).ConfigureAwait(false);
 
             // A trailing gap shorter than MinPreviewDurationSeconds is black/silence before EOF
             // rather than a teaser; absorb it so the outro runs to the end instead of leaving a
@@ -408,6 +421,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         await AnalysisStatusWriter.UpsertAsync(
             db,
             itemId,
+            AnalysisGrouping.GetContainerId(item, itemId),
             Name,
             segments.Count > 0,
             segmentHash,
@@ -425,7 +439,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
     internal static double IntroScanSeconds(double runtimeSeconds, PluginConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);
-        return Math.Min(runtimeSeconds * config.IntroAnalysisPercent, config.MaxIntroDurationSeconds * 2.0);
+        return Math.Min(runtimeSeconds * ChromaprintRegions.IntroFraction, config.MaxIntroDurationSeconds * 2.0);
     }
 
     /// <summary>

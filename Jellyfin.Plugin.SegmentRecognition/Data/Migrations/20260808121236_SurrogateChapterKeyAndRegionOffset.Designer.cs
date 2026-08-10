@@ -34,8 +34,17 @@ namespace Jellyfin.Plugin.SegmentRecognition.Data.Migrations
                     b.Property<string>("ConfigHash")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid>("ContainerId")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("HasResults")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastErrorAt")
+                        .HasColumnType("TEXT");
 
                     b.HasKey("ItemId", "ProviderName");
 

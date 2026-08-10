@@ -131,8 +131,13 @@ public sealed class ChromaprintLostResultsTests : IDisposable
         return id;
     }
 
+    /// <summary>
+    /// A rematch that finds nothing must clear what the previous run stored, flip the status, and
+    /// say why. The status row surviving with <c>HasResults=false</c> is what later lets the task
+    /// push the item and clear Jellyfin's copy - a deleted status row would strand it.
+    /// </summary>
     [Fact]
-    public async Task ItemsThatLoseTheirSegments_AreReported()
+    public async Task FailedRematchClearsStoredSegmentsAndRecordsWhy()
     {
         using var _ = new PluginConfigScope();
 
@@ -142,27 +147,29 @@ public sealed class ChromaprintLostResultsTests : IDisposable
             ids.Add(await GivenEpisodeWithUnmatchableFingerprintAsync(i));
         }
 
-        var lost = await CreateProvider().AnalyzeGroupAsync(_seasonId, CancellationToken.None);
-
-        // Nothing matched, so every stored segment was dropped - and every one of those items has
-        // to be pushed for Jellyfin to stop serving it.
-        Assert.Equal(ids.OrderBy(i => i), lost.OrderBy(i => i));
+        await CreateProvider().AnalyzeGroupAsync(_seasonId, CancellationToken.None);
 
         using var db = _fixture.Factory.CreateDbContext();
+
         Assert.Empty(await db.ChapterAnalysisResults
             .Where(r => r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro)
             .ToListAsync(TestContext.Current.CancellationToken));
-        Assert.All(
-            await db.AnalysisStatuses.ToListAsync(TestContext.Current.CancellationToken),
-            s => Assert.False(s.HasResults));
+
+        var statuses = await db.AnalysisStatuses.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ids.Count, statuses.Count);
+        Assert.All(statuses, s =>
+        {
+            Assert.False(s.HasResults);
+            Assert.Equal(SegmentMatchOutcome.NoSharedAudio, s.IntroOutcome);
+        });
     }
 
     /// <summary>
-    /// An item that never had a segment has nothing for Jellyfin to be holding, so it must not be
-    /// reported - that would push the whole library on every run.
+    /// The same run over items that never had a segment leaves the same recorded state, so the
+    /// task's push gate does not need to distinguish the two cases.
     /// </summary>
     [Fact]
-    public async Task ItemsThatNeverHadSegments_AreNotReported()
+    public async Task ItemsThatNeverHadSegmentsEndInTheSameState()
     {
         using var _ = new PluginConfigScope();
 
@@ -179,8 +186,15 @@ public sealed class ChromaprintLostResultsTests : IDisposable
                 TestContext.Current.CancellationToken);
         }
 
-        var lost = await CreateProvider().AnalyzeGroupAsync(_seasonId, CancellationToken.None);
+        await CreateProvider().AnalyzeGroupAsync(_seasonId, CancellationToken.None);
 
-        Assert.Empty(lost);
+        using var db = _fixture.Factory.CreateDbContext();
+        Assert.All(
+            await db.AnalysisStatuses.ToListAsync(TestContext.Current.CancellationToken),
+            s =>
+            {
+                Assert.False(s.HasResults);
+                Assert.Equal(SegmentMatchOutcome.NoSharedAudio, s.IntroOutcome);
+            });
     }
 }

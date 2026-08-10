@@ -274,7 +274,8 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
             };
         }
 
-        db.ChapterAnalysisResults.AddRange(dbResults.Values);
+        var merged = MergeAdjacent(dbResults.Values, config, isMovie);
+        db.ChapterAnalysisResults.AddRange(merged);
 
         // The config hash is recorded on the status row, not only on the result rows: an item
         // that matched nothing has no result rows to carry a hash, so without this a chapter-name
@@ -282,14 +283,98 @@ public class ChapterNameProvider : IMediaSegmentProvider, IHasOrder
         await AnalysisStatusWriter.UpsertAsync(
             db,
             itemId,
+            AnalysisGrouping.GetContainerId(item, itemId),
             Name,
-            dbResults.Values.Count > 0,
+            merged.Count > 0,
             configHash,
             cancellationToken).ConfigureAwait(false);
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        _logger.LogDebug("ChapterName: found {Count} segments for item {ItemId} from {ChapterCount} chapters", dbResults.Values.Count, itemId, chapters.Count);
+        _logger.LogDebug(
+            "ChapterName: found {Count} segments for item {ItemId} from {ChapterCount} chapters ({Merged} merged away)",
+            merged.Count,
+            itemId,
+            chapters.Count,
+            dbResults.Count - merged.Count);
+    }
+
+    /// <summary>
+    /// Joins runs of same-type segments that touch or overlap into one segment.
+    /// </summary>
+    /// <remarks>
+    /// Chapters abut exactly, so a title sequence split across an "Introduction" and an "OP"
+    /// chapter became two Intro segments and two skip targets for one opening. Only touching or
+    /// overlapping runs are joined: the same type genuinely recurs apart from itself (ad breaks,
+    /// Intro → Commercial → Intro), and of ~20 000 chapter-derived segments 1284 adjacent pairs
+    /// touched exactly while two had any gap. A join that would breach the type's duration window
+    /// is abandoned rather than manufacturing a segment the validator would have rejected.
+    /// </remarks>
+    /// <param name="segments">The per-chapter segments for one item.</param>
+    /// <param name="config">The plugin configuration.</param>
+    /// <param name="isMovie">Whether the item is a movie (movies allow longer outros).</param>
+    /// <returns>The segments with adjacent same-type runs joined.</returns>
+    internal static List<ChapterAnalysisResult> MergeAdjacent(
+        IEnumerable<ChapterAnalysisResult> segments,
+        PluginConfiguration config,
+        bool isMovie)
+    {
+        ArgumentNullException.ThrowIfNull(segments);
+
+        var result = new List<ChapterAnalysisResult>();
+
+        foreach (var group in segments.GroupBy(s => s.SegmentType))
+        {
+            ChapterAnalysisResult? open = null;
+            var names = new List<string>();
+
+            foreach (var segment in group.OrderBy(s => s.StartTicks).ThenBy(s => s.EndTicks))
+            {
+                if (open is null)
+                {
+                    open = segment;
+                    names = [segment.MatchedChapterName];
+                    continue;
+                }
+
+                var joinedEnd = Math.Max(open.EndTicks, segment.EndTicks);
+                var joinedSeconds = (joinedEnd - open.StartTicks) / (double)TimeSpan.TicksPerSecond;
+
+                if (segment.StartTicks <= open.EndTicks
+                    && IsValidDuration((MediaSegmentType)group.Key, joinedSeconds, config, isMovie))
+                {
+                    open.EndTicks = joinedEnd;
+                    names.Add(segment.MatchedChapterName);
+                    continue;
+                }
+
+                result.Add(Close(open, names));
+                open = segment;
+                names = [segment.MatchedChapterName];
+            }
+
+            if (open is not null)
+            {
+                result.Add(Close(open, names));
+            }
+        }
+
+        return result;
+
+        // The stored name is descriptive, not an identifier, so a joined segment says which
+        // chapters it came from rather than silently claiming to be only the first of them.
+        static ChapterAnalysisResult Close(ChapterAnalysisResult segment, List<string> names)
+        {
+            if (names.Count > 1)
+            {
+                var joined = string.Join(" + ", names);
+                segment.MatchedChapterName = joined.Length <= MaxChapterNameLength
+                    ? joined
+                    : names[0];
+            }
+
+            return segment;
+        }
     }
 
     /// <summary>

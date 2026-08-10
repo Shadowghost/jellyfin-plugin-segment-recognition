@@ -245,11 +245,13 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         _logger.LogInformation(
             "Segment analysis task complete: {ChapterAnalyzed} chapter, {BlackFrameAnalyzed} black frame, "
-            + "{FingerprintsGenerated} fingerprints, {SeasonsAnalyzed} seasons compared, "
+            + "{FingerprintsGenerated} fingerprints ({IntroRetries} re-analyzed over a wider region), "
+            + "{SeasonsAnalyzed} seasons compared, "
             + "{Pushed} items pushed, {PushSkipped} push skipped, {Failed} failed",
             stats.ChapterAnalyzed,
             stats.BlackFrameAnalyzed,
             stats.FingerprintsGenerated,
+            stats.IntroRetries,
             stats.SeasonsAnalyzed,
             stats.Pushed,
             stats.PushSkipped,
@@ -415,12 +417,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // 2) Chromaprint per-season comparison. Only run if at least one episode is fingerprintable
         //    AND either we just generated new fingerprints OR previously stored results are stale.
         var ranComparison = false;
-
-        // Items whose segments were removed by this comparison. They no longer pass the
-        // "has results" test in PushSegmentsAsync, but they are exactly the items that must be
-        // pushed: the push is what tells Jellyfin to drop the segment it is still serving.
-        var lostResults = new HashSet<Guid>();
-
         var hasFingerprintableItems = episodes.Any(e => ChromaprintProvider.GetGroupId(e) != Guid.Empty);
         if (config.EnableChromaprintProvider && hasFingerprintableItems)
         {
@@ -430,8 +426,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 _logger.LogDebug("Comparing fingerprints for {Label} ({Count} episodes)", seasonLabel, episodes.Count);
                 try
                 {
-                    lostResults.UnionWith(
-                        await _chromaprintProvider.AnalyzeGroupAsync(seasonId, cancellationToken).ConfigureAwait(false));
+                    await _chromaprintProvider.AnalyzeGroupAsync(seasonId, cancellationToken).ConfigureAwait(false);
                     stats.IncrementSeasonsAnalyzed();
                     ranComparison = true;
                 }
@@ -439,6 +434,16 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 {
                     _logger.LogWarning(ex, "Chromaprint group analysis failed for {Label} ({SeasonId})", seasonLabel, seasonId);
                 }
+            }
+
+            // Checked on every run, not only when the comparison just ran. A season whose results
+            // are otherwise up to date is exactly where an intro cut off by the first-pass region
+            // hides, and nothing would ever mark it stale. Cheap when there is nothing to do, and
+            // self-limiting: retried items are not offered again, so this settles instead of
+            // sweeping the library every night.
+            if (await RetryWiderIntrosAsync(seasonId, seasonLabel, stats, cancellationToken).ConfigureAwait(false))
+            {
+                anyNewWork = true;
             }
         }
 
@@ -450,13 +455,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             foreach (var ep in episodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await PushSegmentsAsync(
-                    ep,
-                    libraryOptions,
-                    forceOverwrite,
-                    stats,
-                    cancellationToken,
-                    pushWithoutResults: lostResults.Contains(ep.Id)).ConfigureAwait(false);
+                await PushSegmentsAsync(ep, libraryOptions, forceOverwrite, stats, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -565,6 +564,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var staleBlackFrameSegments = new HashSet<Guid>();
         var withFingerprint = new HashSet<Guid>();
         var fingerprintHashes = new Dictionary<(Guid, string), string?>();
+        var fingerprintRegions = new Dictionary<(Guid, string), int>();
 
         // Chunk by SQLite's parameter cap so a 1000-episode "season" (or a forced movie batch)
         // doesn't blow the IN(...) limit when EF expands Contains().
@@ -632,13 +632,14 @@ public class AnalyzeSegmentsTask : IScheduledTask
             var fingerprintRows = await db.ChromaprintResults
                 .AsNoTracking()
                 .Where(r => chunk.Contains(r.ItemId))
-                .Select(r => new { r.ItemId, r.Region, r.ConfigHash })
+                .Select(r => new { r.ItemId, r.Region, r.ConfigHash, r.AnalysisDurationSeconds })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
             foreach (var r in fingerprintRows)
             {
                 withFingerprint.Add(r.ItemId);
                 fingerprintHashes[(r.ItemId, r.Region)] = r.ConfigHash;
+                fingerprintRegions[(r.ItemId, r.Region)] = r.AnalysisDurationSeconds;
             }
         }
 
@@ -655,6 +656,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
             RebuildBlackFrameItems = staleBlackFrameSegments,
             ItemsWithFingerprint = withFingerprint,
             FingerprintHashes = fingerprintHashes,
+            FingerprintRegions = fingerprintRegions,
         };
     }
 
@@ -796,33 +798,40 @@ public class AnalyzeSegmentsTask : IScheduledTask
         }
 
         // In-memory check against the staleness snapshot - no DB round-trip in the common case
-        // where the fingerprint already exists and matches the current config.
+        // where the fingerprint already exists and is still usable.
         if (staleness.FingerprintHashes.TryGetValue((item.Id, region), out var existingHash))
         {
-            if (string.Equals(existingHash, expectedHash, StringComparison.Ordinal))
+            // Two independent reasons to regenerate. The hash covers settings that change the
+            // fingerprint's bytes; the region covers how much of the item it spans. Keeping them
+            // apart is what lets a fingerprint that is already wide enough survive - a stored
+            // region is only stale when the wanted one is *wider*, never when it is narrower.
+            var wantedRegion = WantedRegionSeconds(item, region);
+            var storedRegion = staleness.FingerprintRegions.TryGetValue((item.Id, region), out var stored)
+                ? stored
+                : 0;
+
+            // A zero-width row is the sentinel for "extraction yielded nothing"; it is final, so it
+            // is never stale on width grounds.
+            if (string.Equals(existingHash, expectedHash, StringComparison.Ordinal)
+                && (storedRegion == 0 || wantedRegion <= storedRegion + 1))
             {
                 return;
             }
 
             _logger.LogDebug(
-                "Chromaprint {Region} config changed for \"{ItemName}\", regenerating fingerprint",
+                "Chromaprint {Region} fingerprint for \"{ItemName}\" is stale (covers {Stored}s, wants {Wanted:F0}s), regenerating",
                 region,
-                item.Name);
-
-            // Config changed: drop the stale row so GenerateFingerprintAsync (which skips items
-            // that already have a row) will regenerate it. This is the only path that needs a DB
-            // context here.
-            using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-            await db.ChromaprintResults
-                .Where(r => r.ItemId == item.Id && r.Region == region)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
+                item.Name,
+                storedRegion,
+                wantedRegion);
         }
 
         _logger.LogDebug("Generating chromaprint {Region} fingerprint for \"{ItemName}\" ({Path})", region, item.Name, item.Path);
         try
         {
-            await _chromaprintProvider.GenerateFingerprintAsync(item.Id, region, cancellationToken).ConfigureAwait(false);
+            await _chromaprintProvider
+                .GenerateFingerprintAsync(item.Id, region, cancellationToken, WantedRegionSeconds(item, region))
+                .ConfigureAwait(false);
             stats.IncrementFingerprintsGenerated();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -833,6 +842,126 @@ public class AnalyzeSegmentsTask : IScheduledTask
     }
 
     /// <summary>
+    /// Re-fingerprints a season's unconvincing intros over a wider region and compares again.
+    /// </summary>
+    /// <remarks>
+    /// The first-pass region covers 99% of intros; the rest are unreachable at any threshold that
+    /// stays cheap for the other 99%, since long-form drama can run fifteen minutes of cold open
+    /// before its titles. So widen only for the items a season says are wrong.
+    /// </remarks>
+    /// <returns><c>true</c> if anything was re-fingerprinted.</returns>
+    private async Task<bool> RetryWiderIntrosAsync(
+        Guid seasonId,
+        string seasonLabel,
+        TaskStats stats,
+        CancellationToken cancellationToken)
+    {
+        var candidates = await _chromaprintProvider
+            .GetIntroRetryCandidatesAsync(seasonId, cancellationToken).ConfigureAwait(false);
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        // Information rather than Debug: this re-runs ffmpeg over a wider region and re-compares
+        // the group, so it is worth seeing why a run took longer than the previous one. It is also
+        // rare - only seasons whose stored intros look wrong reach here, and each item is offered
+        // once - so it does not turn into per-season noise.
+        _logger.LogInformation(
+            "Re-analyzing {Label}: {Count} intro(s) look cut off by the first-pass region, "
+            + "re-fingerprinting them over up to {Seconds:F0}s",
+            seasonLabel,
+            candidates.Count,
+            candidates.Max(c => c.RegionSeconds));
+
+        var regenerated = new List<Guid>();
+        foreach (var (itemId, regionSeconds) in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                // No delete first: the provider replaces the row itself, once the new fingerprint
+                // exists. A failure here leaves the narrower one in place rather than nothing.
+                await _chromaprintProvider.GenerateFingerprintAsync(
+                    itemId, SegmentSourceNames.RegionIntro, cancellationToken, regionSeconds).ConfigureAwait(false);
+
+                stats.IncrementFingerprintsGenerated();
+                regenerated.Add(itemId);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Wider intro fingerprinting failed for item {ItemId}", itemId);
+                stats.IncrementAnalysisFailed();
+            }
+        }
+
+        if (regenerated.Count == 0)
+        {
+            return false;
+        }
+
+        stats.AddIntroRetries(regenerated.Count);
+
+        try
+        {
+            await _chromaprintProvider.AnalyzeGroupAsync(seasonId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Chromaprint re-comparison failed for {Label} ({SeasonId})", seasonLabel, seasonId);
+            return true;
+        }
+
+        var matchedNow = await CountIntrosAsync(regenerated, cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Re-analyzed {Label}: {Matched} of {Retried} widened item(s) now have an intro",
+            seasonLabel,
+            matchedNow,
+            regenerated.Count);
+
+        return true;
+    }
+
+    /// <summary>
+    /// How many of the given items hold a chromaprint intro.
+    /// </summary>
+    /// <param name="itemIds">The items to count over.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number holding an intro.</returns>
+    private async Task<int> CountIntrosAsync(List<Guid> itemIds, CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        return await db.ChapterAnalysisResults
+            .CountAsync(
+                r => itemIds.Contains(r.ItemId) && r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// How many seconds of an item this run wants fingerprinted for a region.
+    /// </summary>
+    /// <remarks>
+    /// Only the intro region is answered here. The credits region is anchored to the end of the
+    /// audio, whose length needs an ffprobe call to know, so its staleness stays on the config
+    /// hash - which still carries the credits duration.
+    /// </remarks>
+    private static double WantedRegionSeconds(BaseItem item, string region)
+    {
+        if (string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        var runtimeTicks = item.RunTimeTicks ?? 0;
+        return runtimeTicks <= 0
+            ? 0
+            : ChromaprintRegions.FirstPass(runtimeTicks / (double)TimeSpan.TicksPerSecond);
+    }
+
+    /// <summary>
     /// Hands one item to Jellyfin's segment providers.
     /// </summary>
     /// <param name="item">The item to push.</param>
@@ -840,28 +969,27 @@ public class AnalyzeSegmentsTask : IScheduledTask
     /// <param name="forceOverwrite">Whether to replace segments Jellyfin already holds.</param>
     /// <param name="stats">Run statistics.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <param name="pushWithoutResults">
-    /// Push even though no provider reports results. Set for items whose segments were just
-    /// removed: they fail the results test by definition, yet skipping them is what would leave
-    /// Jellyfin serving a segment the plugin no longer believes in. Providers return nothing for
-    /// such an item, which is precisely what makes Jellyfin delete what it has.
-    /// </param>
     /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// The gate is "ever analyzed", not "currently has results". Jellyfin drops a segment only
+    /// when the provider is asked again and returns nothing, so an item that lost its results is
+    /// exactly the one that must be pushed - gating on results left stale segments no later run
+    /// could clear. Items never analyzed are still skipped; nothing was ever given to Jellyfin.
+    /// </remarks>
     private async Task PushSegmentsAsync(
         BaseItem item,
         MediaBrowser.Model.Configuration.LibraryOptions libraryOptions,
         bool forceOverwrite,
         TaskStats stats,
-        CancellationToken cancellationToken,
-        bool pushWithoutResults = false)
+        CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        var hasResults = await db.AnalysisStatuses
-            .AnyAsync(s => s.ItemId == item.Id && s.HasResults, cancellationToken)
+        var analyzed = await db.AnalysisStatuses
+            .AnyAsync(s => s.ItemId == item.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!hasResults && !pushWithoutResults)
+        if (!analyzed)
         {
             stats.IncrementPushSkipped();
             return;
@@ -918,8 +1046,11 @@ public class AnalyzeSegmentsTask : IScheduledTask
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
+        // Every analyzed item, not only those with results - same reasoning as PushSegmentsAsync.
+        // Force-push exists to reconcile Jellyfin with the cache, and an item whose results are
+        // gone is the one most likely to be out of sync; filtering it out made the escape hatch
+        // unable to fix the very state a user would reach for it to fix.
         var itemIds = await db.AnalysisStatuses
-            .Where(s => s.HasResults)
             .Select(s => s.ItemId)
             .Distinct()
             .ToListAsync(cancellationToken)
@@ -1032,5 +1163,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
         public HashSet<Guid> ItemsWithFingerprint { get; init; } = [];
 
         public Dictionary<(Guid ItemId, string Region), string?> FingerprintHashes { get; init; } = [];
+
+        /// <summary>Gets how many seconds each stored fingerprint covers.</summary>
+        public Dictionary<(Guid ItemId, string Region), int> FingerprintRegions { get; init; } = [];
     }
 }

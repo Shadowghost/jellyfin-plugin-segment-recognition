@@ -51,6 +51,18 @@ public class SegmentDbContext : DbContext
         {
             entity.HasKey(e => new { e.ItemId, e.ProviderName });
             entity.HasIndex(e => e.ItemId);
+
+            // The analyzed-items listing groups by ContainerId on every request; unindexed that is
+            // a full table scan into a temporary B-tree. Indexing ContainerId alone gets the
+            // grouping order but still costs one rowid lookup per row into the main table, whose
+            // pages are interleaved with the fingerprint blobs - on a real database that is ~165k
+            // random reads across ~2 GB for every request. Carrying the four aggregated columns
+            // lets SQLite answer from the index alone (SCAN USING COVERING INDEX).
+            //
+            // This replaces a plain ContainerId index, which it subsumes as its leftmost prefix.
+            // Keeping both only cost write amplification on the analysis path.
+            entity.HasIndex(e => new { e.ContainerId, e.HasResults, e.AnalyzedAt, e.ProviderName, e.LastError })
+                .HasDatabaseName("IX_AnalysisStatuses_ContainerRollup");
         });
 
         modelBuilder.Entity<BlackFrameResult>(entity =>

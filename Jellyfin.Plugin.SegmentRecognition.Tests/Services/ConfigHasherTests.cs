@@ -20,11 +20,16 @@ public class ConfigHasherTests
         Assert.Equal(ConfigHasher.BlackFrameSegments(config1), ConfigHasher.BlackFrameSegments(config2));
     }
 
+    /// <summary>
+    /// The intro hash covers settings that change a fingerprint's bytes. How much of the item is
+    /// covered is not one of them - that is tracked per fingerprint, so a region change never has
+    /// to invalidate fingerprints that are already wide enough.
+    /// </summary>
     [Fact]
-    public void DifferentIntroConfig_ProducesDifferentHash()
+    public void DifferentSampleRate_ProducesDifferentIntroHash()
     {
         var config1 = new PluginConfiguration();
-        var config2 = new PluginConfiguration { IntroAnalysisPercent = 0.5 };
+        var config2 = new PluginConfiguration { ChromaprintSampleRate = 44100 };
 
         Assert.NotEqual(ConfigHasher.ChromaprintIntro(config1), ConfigHasher.ChromaprintIntro(config2));
     }

@@ -29,17 +29,9 @@ namespace Jellyfin.Plugin.SegmentRecognition.Providers;
 public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 {
     /// <summary>
-    /// Maximum number of counterparts a single item is compared against.
-    /// <para>
-    /// Consensus needs several opinions but not every one: an exhaustive pairwise pass is
-    /// O(N²) per season and each comparison is a full Hamming scan, which on a large season with
-    /// no real match degenerates badly. A handful of counterparts is ample for a majority vote
-    /// and bounds the work at O(N).
-    /// </para>
-    /// <para>
-    /// Which counterparts those are matters as much as how many - see
+    /// How many counterparts an item is compared against. Enough for a majority vote, and bounds
+    /// an otherwise O(N²) pass at O(N). Which ones matters as much as how many - see
     /// <see cref="NeighboursByDistance"/>.
-    /// </para>
     /// </summary>
     private const int MaxCounterpartsPerItem = 8;
 
@@ -58,15 +50,9 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     private const long IntroPositionToleranceTicks = 120 * TimeSpan.TicksPerSecond;
 
     /// <summary>
-    /// The same tolerance for outros, which are measured back from the end of the file.
-    /// <para>
-    /// Much tighter than the intro's, because the two positions are set by different things: an
-    /// intro's offset depends on the cold open, which varies episode to episode, while an outro's
-    /// distance from the end is the length of the credits, which a season keeps fixed. The whole
-    /// outro population also lives inside the last <c>CreditsAnalysisDurationSeconds</c> of the
-    /// file, so the intro's 120 s would span half the searchable window and cluster everything
-    /// together.
-    /// </para>
+    /// The same tolerance for outros, measured back from the end. Much tighter than the intro's:
+    /// credits length is fixed within a season where cold-open length is not, and the whole outro
+    /// population sits inside the last few minutes, so 120 s would cluster everything together.
     /// </summary>
     private const long OutroPositionToleranceTicks = 30 * TimeSpan.TicksPerSecond;
 
@@ -88,6 +74,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// cluster of three out of five is a "majority" that means nothing.
     /// </summary>
     private const int MinSegmentsForSeasonPruning = 6;
+
+    /// <summary>
+    /// An intro shorter than this fraction of the season's longest is treated as a mismatch worth
+    /// retrying. Catches the item that locked onto a short shared ident because its real opening
+    /// lay outside the first-pass region - which reports success, not failure.
+    /// </summary>
+    private const double SuspectIntroFraction = 0.5;
 
     private readonly FfmpegChromaprintService _chromaprintService;
     private readonly ILibraryManager _libraryManager;
@@ -143,13 +136,23 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     public async Task CleanupExtractedData(Guid itemId, CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        db.ChromaprintResults.RemoveRange(
-            db.ChromaprintResults.Where(r => r.ItemId == itemId));
-        db.AnalysisStatuses.RemoveRange(
-            db.AnalysisStatuses.Where(s => s.ItemId == itemId && s.ProviderName == Name));
+        await db.ChromaprintResults
+            .Where(r => r.ItemId == itemId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.ChapterAnalysisResults
+            .Where(r => r.ItemId == itemId
+                && SegmentSourceNames.ChromaprintOwned.Contains(r.MatchedChapterName))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await db.AnalysisStatuses
+            .Where(s => s.ItemId == itemId && s.ProviderName == Name)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -240,8 +243,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// <param name="itemId">The item identifier.</param>
     /// <param name="region">The region to fingerprint ("Intro" or "Credits").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="minRegionSeconds">Widens the intro region to at least this, for a retry.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task GenerateFingerprintAsync(Guid itemId, string region, CancellationToken cancellationToken)
+    public async Task GenerateFingerprintAsync(
+        Guid itemId,
+        string region,
+        CancellationToken cancellationToken,
+        double minRegionSeconds = 0)
     {
         var item = _libraryManager.GetItemById(itemId);
         if (item?.Path is null || (item.RunTimeTicks ?? 0) <= 0)
@@ -255,31 +263,45 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             return;
         }
 
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var isCreditsRegion = string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal);
+        var configHash = isCreditsRegion
+            ? ConfigHasher.ChromaprintCredits(config)
+            : ConfigHasher.ChromaprintIntro(config);
+
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
-        var existing = await db.ChromaprintResults
-            .AnyAsync(r => r.ItemId == itemId && r.Region == region, cancellationToken)
+        var stored = await db.ChromaprintResults
+            .Where(r => r.ItemId == itemId && r.Region == region)
+            .Select(r => new { r.AnalysisDurationSeconds, r.ConfigHash })
+            .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        if (existing)
+        // Keep what is there when it was produced under this configuration and reaches at least as
+        // far as asked. Judging both here rather than in the caller is what lets the caller stop
+        // deleting the row up front to force a rebuild. A zero-width row is the sentinel written
+        // when extraction yielded nothing; it is final, and comparing it on width would re-run
+        // ffmpeg against an item with no usable audio on every pass.
+        var covered = stored is null ? (int?)null : stored.AnalysisDurationSeconds;
+        if (stored is not null
+            && string.Equals(stored.ConfigHash, configHash, StringComparison.Ordinal)
+            && (stored.AnalysisDurationSeconds == 0 || stored.AnalysisDurationSeconds + 1 >= minRegionSeconds))
         {
             return;
         }
 
-        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
         var runtimeSeconds = item.RunTimeTicks!.Value / (double)TimeSpan.TicksPerSecond;
 
         // For short media (≤10 minutes), fingerprint the entire file in the Intro region.
         // Skip the Credits region since it would be identical.
-        var isShortMedia = runtimeSeconds <= 600;
+        var isShortMedia = runtimeSeconds <= ChromaprintRegions.ShortMediaSeconds;
 
-        if (isShortMedia && string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
+        if (isShortMedia && isCreditsRegion)
         {
             _logger.LogDebug("Skipping credits fingerprint for short media ({Duration:F0}s) item {ItemId}", runtimeSeconds, itemId);
 
             // Store an empty sentinel so the task knows this was intentionally skipped
             // and doesn't retry on every run.
-            var creditsHash = ConfigHasher.ChromaprintCredits(config);
             db.ChromaprintResults.Add(new ChromaprintResult
             {
                 ItemId = itemId,
@@ -288,11 +310,11 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 FingerprintData = [],
                 AnalysisDurationSeconds = 0,
                 RegionStartTicks = 0,
-                ConfigHash = creditsHash,
+                ConfigHash = configHash,
                 CreatedAt = DateTime.UtcNow
             });
 
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await StoreAsync().ConfigureAwait(false);
             return;
         }
 
@@ -304,7 +326,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             startSeconds = 0;
             analysisSeconds = runtimeSeconds;
         }
-        else if (string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal))
+        else if (isCreditsRegion)
         {
             // MKV containers can report a duration based on the longest stream (e.g. subtitles
             // that extend far beyond the actual audio/video). When enabled, probe the actual audio
@@ -330,9 +352,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         else
         {
             startSeconds = 0;
-            analysisSeconds = Math.Min(
-                runtimeSeconds * config.IntroAnalysisPercent,
-                config.ChromaprintAnalysisDurationSeconds);
+            analysisSeconds = Math.Max(ChromaprintRegions.FirstPass(runtimeSeconds), minRegionSeconds);
         }
 
         var fpData = await _chromaprintService.GenerateFingerprintAsync(
@@ -341,10 +361,6 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             startSeconds,
             analysisSeconds,
             cancellationToken).ConfigureAwait(false);
-
-        var configHash = string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal)
-            ? ConfigHasher.ChromaprintCredits(config)
-            : ConfigHasher.ChromaprintIntro(config);
 
         if (fpData.Length == 0)
         {
@@ -363,7 +379,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 CreatedAt = DateTime.UtcNow
             });
 
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await StoreAsync().ConfigureAwait(false);
             return;
         }
 
@@ -384,7 +400,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             CreatedAt = DateTime.UtcNow
         });
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await StoreAsync().ConfigureAwait(false);
 
         _logger.LogDebug(
             "Chromaprint: generated {Region} fingerprint ({Bytes} bytes) for \"{ItemName}\" ({Path})",
@@ -392,6 +408,28 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
             fpData.Length,
             item.Name,
             item.Path);
+
+        // Replaces any existing row in one transaction. Every caller reaches here only after the
+        // ffmpeg work has succeeded, so a regeneration cannot leave the item with no fingerprint:
+        // deleting up front meant a failed re-extraction destroyed a usable one.
+        async Task StoreAsync()
+        {
+            if (covered is null)
+            {
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+            await db.ChromaprintResults
+                .Where(r => r.ItemId == itemId && r.Region == region)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -401,13 +439,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// </summary>
     /// <param name="groupId">The group identifier (season ID or album ID).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>
-    /// The items that had chromaprint segments before this run and have none after it, because a
-    /// rematch failed or the season-position check discarded what they had. The caller has to push
-    /// these even though they now have nothing to offer: the push is the only thing that clears
-    /// the segment Jellyfin is still serving.
-    /// </returns>
-    public async Task<IReadOnlyCollection<Guid>> AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task AnalyzeGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {
         using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
 
@@ -494,9 +527,20 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         var currentComparisonHash = ConfigHasher.ChromaprintComparison(config);
         var lostResults = new List<Guid>();
 
+        // The persisted SeriesId can be empty (see AnalysisGrouping.GetContainerId); fall back
+        // to the ancestor walk before resolving containers per item.
+        var groupContainerId = Guid.Empty;
+        if (_libraryManager.GetItemById(groupId) is Season season)
+        {
+            groupContainerId = season.SeriesId != Guid.Empty ? season.SeriesId : season.FindSeriesId();
+        }
+
         foreach (var itemId in allItemIds)
         {
             var hasResults = itemsWithResults.Contains(itemId);
+            var containerId = groupContainerId != Guid.Empty
+                ? groupContainerId
+                : AnalysisGrouping.GetContainerId(_libraryManager.GetItemById(itemId), itemId);
 
             // Only items this run actually evaluated appear in the outcome maps; an item skipped
             // because its stored result is still current keeps whatever outcome it already had.
@@ -513,6 +557,10 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 existingStatus.HasResults = hasResults;
                 existingStatus.AnalyzedAt = DateTime.UtcNow;
                 existingStatus.ConfigHash = currentComparisonHash;
+                if (containerId != Guid.Empty)
+                {
+                    existingStatus.ContainerId = containerId;
+                }
 
                 if (introOutcome is not null)
                 {
@@ -529,6 +577,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 db.AnalysisStatuses.Add(new AnalysisStatus
                 {
                     ItemId = itemId,
+                    ContainerId = containerId,
                     ProviderName = Name,
                     AnalyzedAt = DateTime.UtcNow,
                     HasResults = hasResults,
@@ -557,13 +606,14 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         if (lostResults.Count > 0)
         {
+            // Worth surfacing on its own: these items keep whatever Jellyfin is already serving
+            // until the task pushes them again, which is why the push gate keys on "analyzed"
+            // rather than "has results".
             _logger.LogDebug(
-                "Chromaprint: {Count} item(s) in group {GroupId} lost their segments and need a push to clear them",
+                "Chromaprint: {Count} item(s) in group {GroupId} lost their segments",
                 lostResults.Count,
                 groupId);
         }
-
-        return lostResults;
     }
 
     /// <summary>
@@ -639,6 +689,20 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
         // =================================================================================
         var itemsToReset = new List<Guid>();      // items whose stale rows should be deleted
         var toAdd = new List<ChapterAnalysisResult>();
+        // Where the fingerprinted audio ends, per item. Only outros need it (they are positioned
+        // back from that point), and it has to cover items this run skips as up-to-date, so it is
+        // built from the fingerprint rows rather than inside the evaluation loop.
+        var anchorByItem = new Dictionary<Guid, long>(isCredits ? fingerprints.Count : 0);
+        if (isCredits)
+        {
+            foreach (var fingerprint in fingerprints)
+            {
+                var itemRuntime = _libraryManager.GetItemById(fingerprint.ItemId)?.RunTimeTicks ?? 0;
+                anchorByItem[fingerprint.ItemId] =
+                    RegionOffsetTicks(fingerprint, itemRuntime, isCredits)
+                    + (fingerprint.AnalysisDurationSeconds * TimeSpan.TicksPerSecond);
+            }
+        }
 
         // Pass the region's own global min-duration to the comparer. No reason to have a
         // provider-specific "ChromaprintMinMatchDuration" when the intro/outro windows
@@ -669,16 +733,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // The offset of the fingerprint within the file. Stored explicitly since the credits
-            // region is anchored to the audio duration, which can be shorter than the container
-            // runtime. Rows written before that column existed carry 0; for credits that is not a
-            // possible real value (a credits fingerprint never starts at 0 - short media is
-            // fingerprinted whole under the Intro region), so fall back to the old derivation.
-            var regionOffsetTicks = current.RegionStartTicks;
-            if (isCredits && regionOffsetTicks == 0)
-            {
-                regionOffsetTicks = Math.Max(0, runtimeTicks - (current.AnalysisDurationSeconds * TimeSpan.TicksPerSecond));
-            }
+            var regionOffsetTicks = RegionOffsetTicks(current, runtimeTicks, isCredits);
 
             // Collect one candidate region per counterpart, then take the position that the most
             // counterparts agree on. Accepting the first counterpart that happened to produce an
@@ -795,7 +850,8 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                     bestMatch.EndTicks,
                     item!.Path!,
                     videoCodec,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    minMatchDurationSeconds).ConfigureAwait(false);
 
                 // If this is an outro/credits that ends before the episode's runtime, the
                 // trailing portion is either a real next-episode teaser or just a couple of
@@ -859,6 +915,7 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 matchedChapterName,
                 segmentType,
                 isCredits,
+                anchorByItem,
                 existingResultsByItem,
                 itemsToReset,
                 toAdd,
@@ -911,29 +968,115 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     }
 
     /// <summary>
+    /// Items in a group whose intro is worth searching for again over a wider region.
+    /// </summary>
+    /// <remarks>
+    /// Two shapes qualify: no intro at all, and an intro far shorter than the season's longest.
+    /// The second matters as much as the first - an episode whose opening lies past the first-pass
+    /// region often still matches a brief shared ident at the head of the file, which looks like
+    /// success. Items already fingerprinted at the retry width are excluded, so a group with
+    /// genuinely no shared opening settles after one retry instead of re-extracting every run.
+    /// </remarks>
+    /// <param name="groupId">The group identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The items to re-fingerprint, and the region each needs.</returns>
+    public async Task<IReadOnlyList<(Guid ItemId, double RegionSeconds)>> GetIntroRetryCandidatesAsync(
+        Guid groupId,
+        CancellationToken cancellationToken)
+    {
+        using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+
+        var fingerprints = await db.ChromaprintResults
+            .AsNoTracking()
+            .Where(r => r.SeasonId == groupId && r.Region == SegmentSourceNames.RegionIntro && r.AnalysisDurationSeconds > 0)
+            .Select(r => new { r.ItemId, r.AnalysisDurationSeconds })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (fingerprints.Count == 0)
+        {
+            return [];
+        }
+
+        var itemIds = fingerprints.Select(f => f.ItemId).ToList();
+        var introLengths = (await db.ChapterAnalysisResults
+            .AsNoTracking()
+            .Where(r => itemIds.Contains(r.ItemId) && r.MatchedChapterName == SegmentSourceNames.ChromaprintIntro)
+            .Select(r => new { r.ItemId, Length = r.EndTicks - r.StartTicks })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false))
+            .ToDictionary(r => r.ItemId, r => r.Length);
+
+        var longest = introLengths.Count > 0 ? introLengths.Values.Max() : 0;
+        var candidates = new List<(Guid, double)>();
+
+        foreach (var fingerprint in fingerprints)
+        {
+            // Suspicion is decided from rows already in hand; the library lookup that follows only
+            // happens for the few items that fail it, which keeps this affordable on every run.
+            var suspect = !introLengths.TryGetValue(fingerprint.ItemId, out var length)
+                || (longest > 0 && length < longest * SuspectIntroFraction);
+
+            if (!suspect)
+            {
+                continue;
+            }
+
+            var runtimeTicks = _libraryManager.GetItemById(fingerprint.ItemId)?.RunTimeTicks ?? 0;
+            if (runtimeTicks <= 0)
+            {
+                continue;
+            }
+
+            var retrySeconds = ChromaprintRegions.ForRetry(runtimeTicks / (double)TimeSpan.TicksPerSecond);
+            if (retrySeconds > fingerprint.AnalysisDurationSeconds + 1)
+            {
+                candidates.Add((fingerprint.ItemId, retrySeconds));
+            }
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Where a fingerprint's region starts within its file.
+    /// </summary>
+    /// <remarks>
+    /// Stored explicitly because the credits region is anchored to the audio duration, which can be
+    /// shorter than the container runtime. Rows written before that column existed carry 0, which
+    /// is not a real value for credits - a credits fingerprint never starts at 0, since short media
+    /// is fingerprinted whole under the intro region - so those fall back to the old derivation.
+    /// </remarks>
+    /// <param name="fingerprint">The fingerprint row.</param>
+    /// <param name="runtimeTicks">The item's runtime, for the legacy fallback.</param>
+    /// <param name="isCredits">Whether this is the credits region.</param>
+    /// <returns>The region's start offset in ticks.</returns>
+    private static long RegionOffsetTicks(ChromaprintResult fingerprint, long runtimeTicks, bool isCredits)
+    {
+        if (!isCredits || fingerprint.RegionStartTicks != 0)
+        {
+            return fingerprint.RegionStartTicks;
+        }
+
+        return Math.Max(0, runtimeTicks - (fingerprint.AnalysisDurationSeconds * TimeSpan.TicksPerSecond));
+    }
+
+    /// <summary>
     /// Applies <see cref="SelectSeasonOutliers"/> to the whole season and removes what it flags.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// The population has to span the season, not just the items re-evaluated on this run:
-    /// judging a straggler needs the positions its siblings agreed on, and on an incremental run
-    /// most of those come from rows written earlier. Rows belonging to items already queued for
-    /// deletion are excluded - they are about to be replaced by the entries in
-    /// <paramref name="toAdd"/>, which are counted instead.
-    /// </para>
-    /// <para>
-    /// Intros are positioned from the start of the file and outros from the end, because that is
-    /// what each one is actually anchored to. Runtimes vary widely inside a season - by more than
-    /// 15 minutes in the top decile of the sample library - so measuring a credits sequence from
-    /// the start of the file scatters a season that is in fact perfectly consistent: on that
-    /// library only 57% of seasons showed a dominant outro position start-relative, against 96%
-    /// end-relative.
-    /// </para>
+    /// The population spans the season, not just items re-evaluated this run: judging a straggler
+    /// needs the positions its siblings agreed on, most of which come from earlier rows. Items
+    /// queued for deletion are excluded, since <paramref name="toAdd"/> replaces them.
+    /// Intros are measured from the start and outros from the end, because that is what each is
+    /// anchored to - runtimes vary by over 15 minutes within a season in the top decile, and
+    /// measuring credits from the start dropped seasons with a dominant position from 96% to 57%.
     /// </remarks>
     private void PruneSeasonOutliers(
         string matchedChapterName,
         MediaSegmentType segmentType,
         bool isCredits,
+        Dictionary<Guid, long> anchorByItem,
         Dictionary<Guid, ChapterAnalysisResult> existingResultsByItem,
         List<Guid> itemsToReset,
         List<ChapterAnalysisResult> toAdd,
@@ -959,12 +1102,14 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
                 continue;
             }
 
-            // An outro's position is its distance back from the end of the file. An item whose
-            // runtime is unknown has no such coordinate, so it cannot be judged either way.
-            var runtimeTicks = _libraryManager.GetItemById(itemId)?.RunTimeTicks ?? 0;
-            if (runtimeTicks > 0)
+            // Measured back from the end of the *fingerprinted audio*, which is what the segment's
+            // position was derived from. Taking the container runtime instead mixes coordinates on
+            // any file whose duration outruns its audio - an MKV with over-long subtitles - and
+            // inflates that item's distance until it looks isolated. On the sample library such
+            // items were pruned at 16% against 1.4% for the rest.
+            if (anchorByItem.TryGetValue(itemId, out var audioEndTicks))
             {
-                population.Add((itemId, runtimeTicks - startTicks));
+                population.Add((itemId, audioEndTicks - startTicks));
             }
         }
 
@@ -1012,27 +1157,13 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// Picks the segments in a season that sit at a position essentially no other episode shares.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// An episode that has no intro of its own can still produce one: with nothing at the front to
-    /// lock onto, the matcher falls through to whatever incidental music cue it happens to share
-    /// with a sibling, and a cue corroborated by two counterparts passes consensus. Those land at
-    /// arbitrary positions - 217 s, 490 s, 503 s in a season where seventeen episodes agree on 0 s.
-    /// </para>
-    /// <para>
-    /// The test is deliberately <em>not</em> distance from the season's average position. Seasons
-    /// legitimately carry several intro positions, because the cold open before the titles varies:
-    /// one 197-episode arc in the sample library splits 141 episodes at 0 s, 41 at 196 s and 15 at
-    /// 271 s, all correct. Rejecting on distance would have discarded 56 good intros there. What
-    /// separates a format variant from noise is not where it sits but how many episodes
-    /// independently landed on it, so this clusters the season's positions and drops only the
-    /// clusters too small to be a variant.
-    /// </para>
-    /// <para>
-    /// Pruning is skipped entirely unless one cluster holds a clear majority of the season. Without
-    /// a dominant position there is no established format for a straggler to be a straggler
-    /// <em>from</em> - the season's matching is simply unreliable, and guessing which scattered
-    /// results are wrong would remove as many good ones as bad.
-    /// </para>
+    /// Deliberately not distance from the season's average: seasons legitimately carry several
+    /// positions, since the cold open varies. One 197-episode arc splits 141/41/15 across three,
+    /// all correct, and a distance rule would have discarded 56 good intros there. What separates
+    /// a format variant from noise is how many episodes independently landed on it, so this
+    /// clusters positions and drops only clusters too small to be a variant. Skipped entirely
+    /// unless one cluster holds a clear majority - without a dominant position there is nothing to
+    /// be a straggler from, and guessing would remove as many good results as bad.
     /// </remarks>
     /// <param name="population">
     /// Every segment of this kind in the season, as (item, position). The position is measured in
@@ -1053,12 +1184,17 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
 
         var ordered = population.OrderBy(p => p.PositionTicks).ToList();
 
-        // Greedy chaining against each cluster's first member, matching SelectConsensusRegion.
+        // Chained against each cluster's *previous* member, not its first. Where the cold open
+        // varies continuously the positions form a run rather than tight groups - one season
+        // spreads its intros over 22s..292s with no consecutive gap above 93s - and anchoring on
+        // the first member chops that run into pieces, leaving the tail as a singleton to be
+        // pruned. Anchoring on the previous member keeps a continuum whole. Genuinely isolated
+        // positions are unaffected: they are far from every member, not just the first.
         var clusters = new List<List<(Guid ItemId, long PositionTicks)>>();
         var current = new List<(Guid ItemId, long PositionTicks)> { ordered[0] };
         for (int i = 1; i < ordered.Count; i++)
         {
-            if (ordered[i].PositionTicks - current[0].PositionTicks <= toleranceTicks)
+            if (ordered[i].PositionTicks - current[^1].PositionTicks <= toleranceTicks)
             {
                 current.Add(ordered[i]);
                 continue;
@@ -1136,19 +1272,11 @@ public class ChromaprintProvider : IMediaSegmentProvider, IHasOrder
     /// alternating below/above so both directions are sampled evenly.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Counterparts used to be taken as simply the first <see cref="MaxCounterpartsPerItem"/> rows
-    /// of the group. A season whose opening changes partway through - split-cour anime, a
-    /// mid-season rebrand - contains two disjoint sets of episodes that share an OP, and under
-    /// that rule every episode past the eighth was only ever compared against the head of the
-    /// season. The only audio the two halves have in common is whatever is glued to the front of
-    /// every file (a distributor ident), so the second half's intro collapsed onto that instead of
-    /// its actual opening.
-    /// </para>
-    /// <para>
-    /// Walking outwards from each item keeps the comparison inside the run of episodes most likely
-    /// to share an opening, and costs nothing extra: the same number of pairs are compared.
-    /// </para>
+    /// Taking the first N rows instead meant every episode past the Nth was only ever compared
+    /// against the head of the season. Where the opening changes partway through - split-cour
+    /// anime, a mid-season rebrand - the two halves share only the ident at the front of every
+    /// file, so the second half collapsed onto that. Walking outwards keeps comparisons inside the
+    /// run of episodes likely to share an opening, for the same number of pairs.
     /// </remarks>
     /// <param name="index">The index to walk outwards from.</param>
     /// <param name="count">The number of items in the list.</param>
