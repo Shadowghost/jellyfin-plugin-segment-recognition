@@ -15,7 +15,6 @@ A Jellyfin plugin that automatically detects and manages media segments (intros,
 - **Config Staleness Detection** -- Both results and analysis status store a hash of the configuration that produced them, so items that matched *nothing* are re-analyzed too when settings change. Black-frame analysis splits this in two: changing a clustering threshold or duration window replays from the cached samples, while re-extracting samples (the expensive part) stays behind the explicit `Re-analyze Black Frames` toggle.
 - **Incremental Processing** -- Only analyzes new items, and pushes every item it has analyzed rather than only those with results. Jellyfin drops a segment when the provider is asked again and returns nothing, so an item that has *lost* its results is precisely the one that must be pushed; gating the push on having results left stale segments in Jellyfin that no later run could clear.
 - **EDL Export/Import** -- Exports segments as Kodi/MPlayer-compatible `.edl` sidecar files. Imports `.edl` files with support for standard 3-column and an extended format with segment type names for lossless round-trips. Exported files carry a generated-by marker so they are never re-imported as a second provider's results, and sidecars the plugin did not write are never overwritten or deleted.
-- **Intro Skipper Import** -- One-time migration from the intro-skipper plugin database.
 
 ## How It Works
 
@@ -40,6 +39,7 @@ Then install "Segment Recognition" from the plugin catalog and restart Jellyfin.
 ### Manual installation
 
 ```bash
+export NUGET_AUTH_TOKEN=<github-token-with-read:packages>   # Jellyfin 12 packages come from GitHub Packages
 dotnet build jellyfin-plugin-segment-recognition.slnx -c Release
 ```
 
@@ -47,11 +47,11 @@ Copy `Jellyfin.Plugin.SegmentRecognition/bin/Release/net10.0/Jellyfin.Plugin.Seg
 
 ## Configuration
 
-Access from **Dashboard > Plugins > Segment Recognition**.
+Access from **Dashboard > Plugins > Segment Recognition**, or from the *Segment Recognition* entry in the main menu.
 
-**Providers** -- Toggle independently: Chapter Name, Black Frame, Chromaprint, EDL Import. Credits fingerprinting, preview inference, and out-of-place segment pruning are sub-options of Chromaprint.
+**Providers** -- Toggle independently: Chapter Name, Chromaprint, and EDL Import are on by default, Black Frame is off. Credits fingerprinting, preview inference, and out-of-place segment pruning are sub-options of Chromaprint.
 
-**Duration Limits** -- Min/max intro (15-120s), min/max outro (15-600s), max movie outro (900s).
+**Duration Limits** -- Min/max intro (5-240s), min/max outro (15-600s), max movie outro (900s), min/max commercial (5-180s), min/max preview (10-45s).
 
 **Black Frame** -- Analysis resolution (480p/720p/native), black threshold (90%), minimum cluster duration (500ms), re-analyze flag, automatic letterbox detection.
 
@@ -90,7 +90,7 @@ arriving during a write would block for the full connection timeout and then fai
 
 ## Requirements
 
-- Jellyfin 10.12+
+- Jellyfin 12 (plugin `targetAbi` 12.0.0.0)
 - .NET 10
 - ffmpeg (provided by Jellyfin) with chromaprint support for audio fingerprinting
 - Optional: hardware acceleration support (VAAPI, CUDA, QSV, VideoToolbox) for faster black frame detection

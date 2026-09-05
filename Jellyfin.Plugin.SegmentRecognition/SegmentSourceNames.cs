@@ -53,11 +53,6 @@ internal static class SegmentSourceNames
     internal const string EdlImportName = "edl-import";
 
     /// <summary>
-    /// Matched chapter name for segments imported from the intro-skipper plugin database.
-    /// </summary>
-    internal const string IntroSkipperImportName = "intro-skipper import";
-
-    /// <summary>
     /// Every sentinel <see cref="Data.Entities.ChapterAnalysisResult.MatchedChapterName"/> value
     /// owned by a provider other than <c>ChapterNameProvider</c>.
     /// </summary>
@@ -70,7 +65,6 @@ internal static class SegmentSourceNames
         BlackFrameOutro,
         BlackFramePreview,
         EdlImportName,
-        IntroSkipperImportName,
     ];
 
     /// <summary>

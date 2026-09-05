@@ -72,7 +72,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EdlImportProvider>();
         serviceCollection.AddSingleton<IMediaSegmentProvider>(sp => sp.GetRequiredService<EdlImportProvider>());
 
-        serviceCollection.AddSingleton<IScheduledTask, ImportIntroSkipperDataTask>();
         serviceCollection.AddSingleton<IScheduledTask, AnalyzeSegmentsTask>();
         serviceCollection.AddSingleton<IScheduledTask, ExportEdlTask>();
     }

@@ -19,7 +19,6 @@ public sealed class ChapterNameCleanupTests
     [InlineData("blackframe-outro")]
     [InlineData("blackframe-preview")]
     [InlineData("edl-import")]
-    [InlineData("intro-skipper import")]
     public void ForeignSentinels_ContainsAllSiblingSources(string sentinel)
     {
         Assert.Contains(sentinel, ChapterNameProvider.ForeignSentinels);
@@ -42,13 +41,13 @@ public sealed class ChapterNameCleanupTests
     public void ForeignSentinels_HasExpectedCount()
     {
         // Bump this when a new sentinel is introduced; the test flags forgotten updates.
-        Assert.Equal(8, ChapterNameProvider.ForeignSentinels.Length);
+        Assert.Equal(7, ChapterNameProvider.ForeignSentinels.Length);
     }
 
     /// <summary>
     /// The cleanup filter and the serve filter must agree. When they drifted, black-frame preview
-    /// and intro-skipper rows were excluded from cleanup but not from ChapterNameProvider's query,
-    /// so two providers served the same segment.
+    /// rows were excluded from cleanup but not from ChapterNameProvider's query, so two providers
+    /// served the same segment.
     /// </summary>
     [Fact]
     public void ForeignSentinels_IsTheSharedList()

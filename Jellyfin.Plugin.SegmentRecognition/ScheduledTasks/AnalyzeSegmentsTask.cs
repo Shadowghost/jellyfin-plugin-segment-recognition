@@ -558,11 +558,9 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         var chapterAnalyzed = new HashSet<Guid>();
         var blackFrameAnalyzed = new HashSet<Guid>();
-        var chromaprintAnalyzed = new HashSet<Guid>();
         var staleChapter = new HashSet<Guid>();
         var staleBlackFrameExtraction = new HashSet<Guid>();
         var staleBlackFrameSegments = new HashSet<Guid>();
-        var withFingerprint = new HashSet<Guid>();
         var fingerprintHashes = new Dictionary<(Guid, string), string?>();
         var fingerprintRegions = new Dictionary<(Guid, string), int>();
 
@@ -597,10 +595,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
                     {
                         staleBlackFrameSegments.Add(s.ItemId);
                     }
-                }
-                else if (s.ProviderName == ProviderNames.Chromaprint)
-                {
-                    chromaprintAnalyzed.Add(s.ItemId);
                 }
             }
 
@@ -637,7 +631,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
                 .ConfigureAwait(false);
             foreach (var r in fingerprintRows)
             {
-                withFingerprint.Add(r.ItemId);
                 fingerprintHashes[(r.ItemId, r.Region)] = r.ConfigHash;
                 fingerprintRegions[(r.ItemId, r.Region)] = r.AnalysisDurationSeconds;
             }
@@ -650,11 +643,9 @@ public class AnalyzeSegmentsTask : IScheduledTask
         {
             ChapterAnalyzed = chapterAnalyzed,
             BlackFrameAnalyzed = blackFrameAnalyzed,
-            ChromaprintAnalyzed = chromaprintAnalyzed,
             StaleChapterItems = staleChapter,
             StaleBlackFrameItems = staleBlackFrameExtraction,
             RebuildBlackFrameItems = staleBlackFrameSegments,
-            ItemsWithFingerprint = withFingerprint,
             FingerprintHashes = fingerprintHashes,
             FingerprintRegions = fingerprintRegions,
         };
@@ -785,17 +776,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
         var expectedHash = string.Equals(region, SegmentSourceNames.RegionCredits, StringComparison.Ordinal)
             ? ConfigHasher.ChromaprintCredits(config)
             : ConfigHasher.ChromaprintIntro(config);
-
-        // If the item has a Chromaprint AnalysisStatus but no fingerprint rows, it was marked as
-        // already analyzed by an external source (e.g. the intro-skipper import task). Don't
-        // fingerprint it - there's no signal to compare against and re-analysis would defeat the
-        // purpose of the import. Items with at least one fingerprint row fall through to the
-        // existing ConfigHash-based regen logic below.
-        if (!staleness.ItemsWithFingerprint.Contains(item.Id)
-            && staleness.ChromaprintAnalyzed.Contains(item.Id))
-        {
-            return;
-        }
 
         // In-memory check against the staleness snapshot - no DB round-trip in the common case
         // where the fingerprint already exists and is still usable.
@@ -1147,8 +1127,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
 
         public HashSet<Guid> BlackFrameAnalyzed { get; init; } = [];
 
-        public HashSet<Guid> ChromaprintAnalyzed { get; init; } = [];
-
         public HashSet<Guid> StaleChapterItems { get; init; } = [];
 
         public HashSet<Guid> StaleBlackFrameItems { get; init; } = [];
@@ -1159,8 +1137,6 @@ public class AnalyzeSegmentsTask : IScheduledTask
         /// re-running the ffmpeg scan.
         /// </summary>
         public HashSet<Guid> RebuildBlackFrameItems { get; init; } = [];
-
-        public HashSet<Guid> ItemsWithFingerprint { get; init; } = [];
 
         public Dictionary<(Guid ItemId, string Region), string?> FingerprintHashes { get; init; } = [];
 
