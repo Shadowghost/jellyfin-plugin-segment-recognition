@@ -56,6 +56,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 
         serviceCollection.AddHostedService<DatabaseInitializer>();
 
+        // Registered as a singleton as well as a hosted service so the analysis task can consult
+        // the same probe result the startup check logged, instead of running ffmpeg again.
+        serviceCollection.AddSingleton<FfmpegCapabilityService>();
+        serviceCollection.AddHostedService(sp => sp.GetRequiredService<FfmpegCapabilityService>());
+
         serviceCollection.AddSingleton<FfmpegBlackFrameService>();
         serviceCollection.AddSingleton<FfmpegChromaprintService>();
         serviceCollection.AddSingleton<SegmentRefiner>();

@@ -47,6 +47,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
     private readonly ChapterNameProvider _chapterNameProvider;
     private readonly BlackFrameProvider _blackFrameProvider;
     private readonly ChromaprintProvider _chromaprintProvider;
+    private readonly FfmpegCapabilityService _ffmpegCapabilities;
     private readonly ILogger<AnalyzeSegmentsTask> _logger;
 
     /// <summary>
@@ -58,6 +59,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
     /// <param name="chapterNameProvider">The chapter name provider.</param>
     /// <param name="blackFrameProvider">The black frame provider.</param>
     /// <param name="chromaprintProvider">The chromaprint provider.</param>
+    /// <param name="ffmpegCapabilities">What the installed ffmpeg can do.</param>
     /// <param name="logger">The logger.</param>
     public AnalyzeSegmentsTask(
         ILibraryManager libraryManager,
@@ -66,6 +68,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         ChapterNameProvider chapterNameProvider,
         BlackFrameProvider blackFrameProvider,
         ChromaprintProvider chromaprintProvider,
+        FfmpegCapabilityService ffmpegCapabilities,
         ILogger<AnalyzeSegmentsTask> logger)
     {
         _libraryManager = libraryManager;
@@ -74,8 +77,19 @@ public class AnalyzeSegmentsTask : IScheduledTask
         _chapterNameProvider = chapterNameProvider;
         _blackFrameProvider = blackFrameProvider;
         _chromaprintProvider = chromaprintProvider;
+        _ffmpegCapabilities = ffmpegCapabilities;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Gets a value indicating whether the installed ffmpeg can produce the fingerprints the
+    /// chromaprint pipeline compares.
+    /// </summary>
+    /// <remarks>
+    /// When it cannot, generation and comparison are both skipped. Without that the run throws
+    /// once per episode, deep into the task, for a reason only the startup probe names.
+    /// </remarks>
+    private bool CanFingerprint => _ffmpegCapabilities.Capabilities.CanFingerprint;
 
     /// <inheritdoc />
     public string Name => "Analyze Segments";
@@ -120,6 +134,17 @@ public class AnalyzeSegmentsTask : IScheduledTask
         if (forceOverwrite)
         {
             _logger.LogInformation("ForceRegenerate is enabled - all segments will be re-pushed to Jellyfin after analysis");
+        }
+
+        // The startup probe usually has the answer already; asking again here covers the case
+        // where it ran before Jellyfin had configured an encoder path.
+        await _ffmpegCapabilities.GetAsync(cancellationToken).ConfigureAwait(false);
+
+        if (config.EnableChromaprintProvider && !CanFingerprint)
+        {
+            _logger.LogWarning(
+                "Chromaprint is enabled but the installed ffmpeg cannot produce raw chromaprint fingerprints - "
+                + "skipping all fingerprint analysis. See the ffmpeg capability warning logged at startup.");
         }
 
         var reanalyzeBlackFrames = config.ReanalyzeBlackFrames;
@@ -418,7 +443,7 @@ public class AnalyzeSegmentsTask : IScheduledTask
         //    AND either we just generated new fingerprints OR previously stored results are stale.
         var ranComparison = false;
         var hasFingerprintableItems = episodes.Any(e => ChromaprintProvider.GetGroupId(e) != Guid.Empty);
-        if (config.EnableChromaprintProvider && hasFingerprintableItems)
+        if (config.EnableChromaprintProvider && hasFingerprintableItems && CanFingerprint)
         {
             var needsCompare = anyNewWork || await IsSeasonStaleAsync(seasonId, config, cancellationToken).ConfigureAwait(false);
             if (needsCompare)
@@ -745,7 +770,8 @@ public class AnalyzeSegmentsTask : IScheduledTask
         }
 
         // Chromaprint fingerprinting (generation only - comparison is done per-group later)
-        if (config.EnableChromaprintProvider && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
+        if (config.EnableChromaprintProvider && CanFingerprint
+            && !IsProviderDisabled(disabledProviders, ProviderNames.Chromaprint)
             && ChromaprintProvider.GetGroupId(item) != Guid.Empty)
         {
             await EnsureChromaprintFingerprintAsync(item, SegmentSourceNames.RegionIntro, config, staleness, stats, cancellationToken).ConfigureAwait(false);
