@@ -29,9 +29,18 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableEdlImportProvider { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets the black frame detection threshold (0-100).
+    /// Gets or sets the percentage of a frame's pixels that have to be black for the frame to
+    /// count as black (0-100).
     /// </summary>
-    public double BlackFrameThreshold { get; set; } = 90.0;
+    /// <remarks>
+    /// Applied by the plugin rather than by ffmpeg, so that it can be normalized against the
+    /// darkness a scan actually contains - see <see cref="Services.BlackFrameThresholdHelper"/>.
+    /// How dark a pixel has to be to count is fixed:
+    /// <see cref="Services.FfmpegBlackFrameService.BlackPixelLumaThreshold"/>. This decides which
+    /// samples get stored, so changing it applies to items analyzed afterwards; use
+    /// <see cref="ReanalyzeBlackFrames"/> for the ones already cached.
+    /// </remarks>
+    public int BlackFrameMinimumPercentage { get; set; } = 85;
 
     /// <summary>
     /// Gets or sets the minimum duration in milliseconds for a black frame cluster to be considered a segment boundary.

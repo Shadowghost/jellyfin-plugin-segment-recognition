@@ -179,20 +179,27 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         var crop = await GetOrDetectCropAsync(db, itemId, item.Path, runtimeSeconds, videoCodec, cancellationToken).ConfigureAwait(false);
         var cropTime = sw.Elapsed;
 
-        // Scan intro region
+        // Scan intro region. Both scans run with amount=0 so ffmpeg reports every frame: the
+        // darkness distribution is what SelectBlackFrames normalizes the configured percentage
+        // against, and it is gone once ffmpeg has filtered on our behalf.
         var introScanSeconds = IntroScanSeconds(runtimeSeconds, config);
         sw.Restart();
-        var introFrames = await _blackFrameService.DetectBlackFramesAsync(
-            item.Path, config.BlackFrameThreshold, 0, introScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
+        var introScan = await _blackFrameService.DetectBlackFramesAsync(
+            item.Path, 0, 0, introScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
         var introTime = sw.Elapsed;
 
         // Scan outro region
         var outroStartSeconds = OutroScanStartSeconds(runtimeSeconds, config);
         var outroScanSeconds = runtimeSeconds - outroStartSeconds;
         sw.Restart();
-        var outroFrames = await _blackFrameService.DetectBlackFramesAsync(
-            item.Path, config.BlackFrameThreshold, outroStartSeconds, outroScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
+        var outroScan = await _blackFrameService.DetectBlackFramesAsync(
+            item.Path, 0, outroStartSeconds, outroScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
         var outroTime = sw.Elapsed;
+
+        // Each region is normalized against its own distribution: an intro that opens on a bright
+        // title card and credits that run dark end to end have nothing to say about each other.
+        var introFrames = SelectBlackFrames(introScan, config.BlackFrameMinimumPercentage);
+        var outroFrames = SelectBlackFrames(outroScan, config.BlackFrameMinimumPercentage);
 
         // Deduplicate frames by TimestampTicks (ffmpeg can report duplicates,
         // and intro/outro scan regions can overlap for short files).
@@ -637,6 +644,36 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         }
 
         return segments;
+    }
+
+    /// <summary>
+    /// Keeps the frames of an unfiltered scan that count as black, with the configured percentage
+    /// normalized against the darkness the scan actually contains.
+    /// </summary>
+    /// <remarks>
+    /// Only the survivors are stored, so the samples in the database mean what they always did - a
+    /// frame that qualified as black. What changed is that "qualified" now accounts for material
+    /// that never reaches full brightness, where a fixed bar lets ordinary dark scenes pass as a
+    /// transition.
+    /// </remarks>
+    /// <param name="scan">Every frame ffmpeg reported for the region.</param>
+    /// <param name="minimumPercentage">The configured minimum black percentage.</param>
+    /// <returns>The frames at or above the normalized minimum, in scan order.</returns>
+    internal static List<(long TimestampTicks, double BlackPercentage)> SelectBlackFrames(
+        List<(long TimestampTicks, double BlackPercentage)> scan,
+        double minimumPercentage)
+    {
+        ArgumentNullException.ThrowIfNull(scan);
+        if (scan.Count == 0)
+        {
+            return [];
+        }
+
+        var minimum = BlackFrameThresholdHelper.NormalizeThreshold(
+            [.. scan.Select(f => f.BlackPercentage)],
+            minimumPercentage);
+
+        return [.. scan.Where(f => f.BlackPercentage >= minimum)];
     }
 
     private static List<(long Start, long End)> ClusterFrames(

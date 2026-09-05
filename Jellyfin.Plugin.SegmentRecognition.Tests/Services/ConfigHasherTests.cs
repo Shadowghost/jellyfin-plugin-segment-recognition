@@ -65,7 +65,7 @@ public class ConfigHasherTests
     public void BlackFrameExtraction_AlwaysReturnsSameHash()
     {
         var config1 = new PluginConfiguration();
-        var config2 = new PluginConfiguration { BlackFrameThreshold = 50.0 };
+        var config2 = new PluginConfiguration { BlackFrameAnalysisHeight = 720 };
 
         // Extraction hash is deliberately constant: re-scanning the whole library because a
         // threshold moved is prohibitively expensive. ReanalyzeBlackFrames is the escape hatch.

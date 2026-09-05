@@ -24,6 +24,19 @@ public partial class FfmpegBlackFrameService
     /// </summary>
     private const double CropDetectSampleSeconds = 10.0;
 
+    /// <summary>
+    /// Luma value below which a pixel counts as black, on ffmpeg's 0-255 scale.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not configurable. There is one right answer here and getting it wrong is
+    /// invisible: this was a user-facing "threshold (%)" field defaulting to 90, and at luma 90
+    /// nearly everything in a dark-graded episode counts as black - measured over three minutes of
+    /// one, 3830 frames of 4500 cleared the bar, against 568 at 28. Nobody can tune a knob whose
+    /// failure mode is "detects a transition everywhere", and the percentage that decides how much
+    /// of a frame must be this dark stays configurable for the cases that need adjusting.
+    /// </remarks>
+    internal const double BlackPixelLumaThreshold = 28;
+
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IConfigurationManager _configurationManager;
     private readonly ILogger<FfmpegBlackFrameService> _logger;
@@ -136,7 +149,10 @@ public partial class FfmpegBlackFrameService
     /// Detects black frames in a specific time range of a media file.
     /// </summary>
     /// <param name="filePath">Path to the media file.</param>
-    /// <param name="threshold">Black frame threshold (0-100).</param>
+    /// <param name="amount">Percentage of pixels that must be below
+    /// <see cref="BlackPixelLumaThreshold"/> for ffmpeg to report a frame. Pass 0 to have every
+    /// frame reported, which is what lets the caller measure the scan's darkness distribution
+    /// before deciding what counts as black.</param>
     /// <param name="startSeconds">Start time in seconds to begin scanning.</param>
     /// <param name="durationSeconds">Duration in seconds to scan.</param>
     /// <param name="crop">Optional crop rectangle to apply before black frame detection (excludes letterbox bars).</param>
@@ -147,7 +163,7 @@ public partial class FfmpegBlackFrameService
     /// <returns>List of detected black frames with timestamp and black percentage.</returns>
     public virtual async Task<List<(long TimestampTicks, double BlackPercentage)>> DetectBlackFramesAsync(
         string filePath,
-        double threshold,
+        double amount,
         double startSeconds,
         double durationSeconds,
         (int Width, int Height, int X, int Y)? crop,
@@ -200,8 +216,9 @@ public partial class FfmpegBlackFrameService
 
                 filterChain.AppendFormat(
                     CultureInfo.InvariantCulture,
-                    "blackframe=threshold={0}",
-                    threshold);
+                    "blackframe=amount={0}:threshold={1}",
+                    amount,
+                    BlackPixelLumaThreshold);
 
                 var args = new List<string>(hwArgs)
                 {

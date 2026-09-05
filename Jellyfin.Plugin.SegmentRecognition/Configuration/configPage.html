@@ -457,9 +457,9 @@
                                         <div class="fieldDescription">Frames are downscaled to this height before analysis. Lower = faster. Uses GPU-side scaling when hardware acceleration is available.</div>
                                     </div>
                                     <div class="inputContainer">
-                                        <label class="inputLabel" for="txtBlackFrameThreshold">Black Frame Threshold (%)</label>
-                                        <input id="txtBlackFrameThreshold" type="number" is="emby-input" min="1" max="100" step="1" />
-                                        <div class="fieldDescription">Percentage of a frame that must be black for it to count (default: 90). Changing this requires "Re-analyze Black Frames".</div>
+                                        <label class="inputLabel" for="txtBlackFrameMinimumPercentage">Black Pixels Per Frame (%)</label>
+                                        <input id="txtBlackFrameMinimumPercentage" type="number" is="emby-input" min="1" max="100" step="1" />
+                                        <div class="fieldDescription">Percentage of a frame's pixels that must be black for the frame to count (default: 85). Normalized against how dark the scanned material is overall, so dark scenes in dark shows are not mistaken for transitions. Changing this requires "Re-analyze Black Frames".</div>
                                     </div>
                                     <div class="inputContainer">
                                         <label class="inputLabel" for="txtBlackFrameMinDuration">Minimum Cluster Duration (ms)</label>
@@ -788,7 +788,7 @@
                         document.getElementById('txtChromaprintInvertedIndexShift').value = config.ChromaprintInvertedIndexShift;
                         document.getElementById('chkEnableChapterSnapping').checked = config.EnableChapterSnapping;
                         document.getElementById('txtChapterSnapWindow').value = config.ChapterSnapWindowSeconds;
-                        document.getElementById('txtBlackFrameThreshold').value = config.BlackFrameThreshold;
+                        document.getElementById('txtBlackFrameMinimumPercentage').value = config.BlackFrameMinimumPercentage;
                         document.getElementById('txtBlackFrameMinDuration').value = config.BlackFrameMinDurationMs;
                         applyConditionalVisibility();
                         Dashboard.hideLoadingMsg();
@@ -844,7 +844,7 @@
                         config.KeyframeSnapWindowSeconds = parseFloat(document.getElementById('txtKeyframeSnapWindow').value);
                         config.EnableChapterSnapping = document.getElementById('chkEnableChapterSnapping').checked;
                         config.ChapterSnapWindowSeconds = parseFloat(document.getElementById('txtChapterSnapWindow').value);
-                        config.BlackFrameThreshold = parseFloat(document.getElementById('txtBlackFrameThreshold').value);
+                        config.BlackFrameMinimumPercentage = parseInt(document.getElementById('txtBlackFrameMinimumPercentage').value, 10);
                         config.BlackFrameMinDurationMs = parseInt(document.getElementById('txtBlackFrameMinDuration').value, 10);
                         config.ChromaprintSampleRate = parseInt(document.getElementById('txtChromaprintSampleRate').value, 10);
                         config.ChromaprintMaxBitErrors = parseInt(document.getElementById('txtChromaprintMaxBitErrors').value, 10);

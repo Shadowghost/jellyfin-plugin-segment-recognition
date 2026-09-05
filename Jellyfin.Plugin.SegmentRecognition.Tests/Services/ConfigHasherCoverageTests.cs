@@ -129,13 +129,13 @@ public sealed class ConfigHasherCoverageTests
     /// library-wide re-scan in production.
     /// </summary>
     [Theory]
-    [InlineData(50.0)]
-    [InlineData(99.0)]
-    public void BlackFrameExtractionHash_IgnoresThreshold(double threshold)
+    [InlineData(720)]
+    [InlineData(0)]
+    public void BlackFrameExtractionHash_IgnoresExtractionSettings(int analysisHeight)
     {
         Assert.Equal(
             ConfigHasher.BlackFrameExtraction(new PluginConfiguration()),
-            ConfigHasher.BlackFrameExtraction(new PluginConfiguration { BlackFrameThreshold = threshold }));
+            ConfigHasher.BlackFrameExtraction(new PluginConfiguration { BlackFrameAnalysisHeight = analysisHeight }));
     }
 
     [Fact]
