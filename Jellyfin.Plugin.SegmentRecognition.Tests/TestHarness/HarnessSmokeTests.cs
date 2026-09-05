@@ -10,7 +10,7 @@ public sealed class HarnessSmokeTests
     [Fact]
     public void PluginConfigScope_InstallsAndRestoresInstance()
     {
-        using (var scope = new PluginConfigScope(c => c.MinIntroDurationSeconds = 42))
+        using (new PluginConfigScope(c => c.MinIntroDurationSeconds = 42))
         {
             Assert.NotNull(Plugin.Instance);
             Assert.Equal(42, Plugin.Instance!.Configuration.MinIntroDurationSeconds);

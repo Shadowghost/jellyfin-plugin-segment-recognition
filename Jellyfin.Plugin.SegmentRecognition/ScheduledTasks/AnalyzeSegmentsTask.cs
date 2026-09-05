@@ -249,12 +249,12 @@ public class AnalyzeSegmentsTask : IScheduledTask
         // the user with neither the old data nor the re-analysis they asked for.
         if (forceOverwrite || reanalyzeBlackFrames)
         {
-            var liveConfig = Plugin.Instance?.Configuration;
-            if (liveConfig is not null)
+            var plugin = Plugin.Instance;
+            if (plugin is not null)
             {
-                liveConfig.ForceRegenerate = false;
-                liveConfig.ReanalyzeBlackFrames = false;
-                Plugin.Instance?.SaveConfiguration();
+                plugin.Configuration.ForceRegenerate = false;
+                plugin.Configuration.ReanalyzeBlackFrames = false;
+                plugin.SaveConfiguration();
             }
         }
 

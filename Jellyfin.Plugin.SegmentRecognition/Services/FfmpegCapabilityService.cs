@@ -69,11 +69,6 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
     /// <returns>The detected capabilities.</returns>
     public async Task<FfmpegCapabilities> GetAsync(CancellationToken cancellationToken)
     {
-        if (_probed is FfmpegCapabilities known)
-        {
-            return known;
-        }
-
         await _probeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

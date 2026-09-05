@@ -312,18 +312,12 @@ public class EdlImportProvider : IMediaSegmentProvider, IHasOrder
     {
         try
         {
-            foreach (var line in File.ReadLines(edlPath))
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Length == 0)
-                {
-                    continue;
-                }
+            // Lazily, so a large sidecar is not read past its first line with content.
+            var firstContentLine = File.ReadLines(edlPath)
+                .Select(line => line.Trim())
+                .FirstOrDefault(trimmed => trimmed.Length > 0);
 
-                return trimmed.StartsWith(GeneratedMarker, StringComparison.Ordinal);
-            }
-
-            return false;
+            return firstContentLine?.StartsWith(GeneratedMarker, StringComparison.Ordinal) ?? false;
         }
         catch (IOException)
         {

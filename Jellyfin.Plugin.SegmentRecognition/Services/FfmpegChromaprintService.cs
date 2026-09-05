@@ -303,15 +303,7 @@ public class FfmpegChromaprintService
             string.IsNullOrEmpty(directory) ? "ffprobe" + extension : Path.Join(directory, "ffprobe" + extension),
         };
 
-        foreach (var candidate in candidates)
-        {
-            if (exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        return candidates.FirstOrDefault(exists);
     }
 
     /// <summary>

@@ -116,7 +116,7 @@ public sealed class BlackFrameSegmentPersistenceTests : IDisposable
 
         _blackFrameService.DetectCropAsync(
                 Arg.Any<string>(), Arg.Any<double>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns((((int, int, int, int)?)null));
+            .Returns(default((int, int, int, int)?));
     }
 
     /// <summary>Silence at the given absolute second, used to pull a boundary during refinement.</summary>
