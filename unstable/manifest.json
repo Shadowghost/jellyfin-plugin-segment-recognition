@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/Shadowghost/jellyfin-plugin-segment-recognition/refs/heads/main/images/jellyfin-plugin-segment-recognition.png",
     "versions": [
       {
+        "version": "2026.9.5.949",
+        "changelog": "",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-2026.09.05.0949-185c0f4/segment-recognition_2026.9.5.949.zip",
+        "checksum": "1418318739ded7bf38886cba5484d5e5",
+        "timestamp": "2026-09-05T09:49:48Z"
+      },
+      {
         "version": "2026.8.10.2141",
         "changelog": "",
         "targetAbi": "12.0.0.0",
@@ -79,14 +87,6 @@
         "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-2026.05.31.2303-907f574/segment-recognition_2026.5.31.2303.zip",
         "checksum": "09d834bdab1ef3056366eb36d17ac7a7",
         "timestamp": "2026-05-31T23:03:45Z"
-      },
-      {
-        "version": "2026.5.25.2123",
-        "changelog": "",
-        "targetAbi": "10.12.0.0",
-        "sourceUrl": "https://github.com/Shadowghost/jellyfin-plugin-segment-recognition/releases/download/unstable-2026.05.25.2123-4091b9b/segment-recognition_2026.5.25.2123.zip",
-        "checksum": "de48a9a162944792795a0209c22bb315",
-        "timestamp": "2026-05-25T21:24:03Z"
       }
     ]
   }
