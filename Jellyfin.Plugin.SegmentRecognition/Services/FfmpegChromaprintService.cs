@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
@@ -18,18 +19,26 @@ namespace Jellyfin.Plugin.SegmentRecognition.Services;
 public class FfmpegChromaprintService
 {
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly IConfigurationManager _configurationManager;
     private readonly ILogger<FfmpegChromaprintService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FfmpegChromaprintService"/> class.
     /// </summary>
     /// <param name="mediaEncoder">The media encoder.</param>
+    /// <param name="configurationManager">The configuration manager.</param>
     /// <param name="logger">The logger.</param>
-    public FfmpegChromaprintService(IMediaEncoder mediaEncoder, ILogger<FfmpegChromaprintService> logger)
+    public FfmpegChromaprintService(
+        IMediaEncoder mediaEncoder,
+        IConfigurationManager configurationManager,
+        ILogger<FfmpegChromaprintService> logger)
     {
         _mediaEncoder = mediaEncoder;
+        _configurationManager = configurationManager;
         _logger = logger;
     }
+
+    private string EncoderPath => FfmpegPathResolver.Resolve(_mediaEncoder, _configurationManager);
 
     /// <summary>
     /// Generates a chromaprint fingerprint for a time range of the specified media file.
@@ -74,7 +83,7 @@ public class FfmpegChromaprintService
             using var process = new Process();
             process.StartInfo = new ProcessStartInfo
             {
-                FileName = _mediaEncoder.EncoderPath,
+                FileName = EncoderPath,
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
@@ -169,10 +178,11 @@ public class FfmpegChromaprintService
     /// <returns>The audio duration in seconds, or <c>null</c> if it could not be determined.</returns>
     public async Task<double?> ProbeAudioDurationAsync(string filePath, CancellationToken cancellationToken)
     {
-        var probePath = ResolveProbePath(_mediaEncoder.EncoderPath, File.Exists);
+        var encoderPath = EncoderPath;
+        var probePath = ResolveProbePath(encoderPath, File.Exists);
         if (probePath is null)
         {
-            _logger.LogDebug("ffprobe not found next to {EncoderPath}, cannot probe audio duration", _mediaEncoder.EncoderPath);
+            _logger.LogDebug("ffprobe not found next to {EncoderPath}, cannot probe audio duration", encoderPath);
             return null;
         }
 
@@ -297,10 +307,18 @@ public class FfmpegChromaprintService
             ? string.Concat(stem.AsSpan(0, idx), "ffprobe", stem.AsSpan(idx + "ffmpeg".Length))
             : stem + "probe";
 
+        // A bare executable name means the OS resolves it through $PATH, so there is no directory
+        // to look in and nothing to test with the existence predicate - hand back the name and let
+        // the process start decide. Checking here would report "not found" for a working ffprobe.
+        if (string.IsNullOrEmpty(directory))
+        {
+            return probeStem + extension;
+        }
+
         var candidates = new[]
         {
-            string.IsNullOrEmpty(directory) ? probeStem + extension : Path.Join(directory, probeStem + extension),
-            string.IsNullOrEmpty(directory) ? "ffprobe" + extension : Path.Join(directory, "ffprobe" + extension),
+            Path.Join(directory, probeStem + extension),
+            Path.Join(directory, "ffprobe" + extension),
         };
 
         return candidates.FirstOrDefault(exists);

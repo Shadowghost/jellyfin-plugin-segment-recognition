@@ -456,7 +456,7 @@ public partial class FfmpegBlackFrameService
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
-            FileName = _mediaEncoder.EncoderPath,
+            FileName = FfmpegPathResolver.Resolve(_mediaEncoder, _configurationManager),
             UseShellExecute = false,
             RedirectStandardError = true,
             CreateNoWindow = true

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -24,17 +25,23 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
 
     private readonly SemaphoreSlim _probeLock = new(1, 1);
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly IConfigurationManager _configurationManager;
     private readonly ILogger<FfmpegCapabilityService> _logger;
     private FfmpegCapabilities? _probed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FfmpegCapabilityService"/> class.
     /// </summary>
-    /// <param name="mediaEncoder">The media encoder, for the ffmpeg path Jellyfin is configured with.</param>
+    /// <param name="mediaEncoder">The media encoder, for the ffmpeg path Jellyfin validated.</param>
+    /// <param name="configurationManager">The configuration manager, for the configured path.</param>
     /// <param name="logger">The logger.</param>
-    public FfmpegCapabilityService(IMediaEncoder mediaEncoder, ILogger<FfmpegCapabilityService> logger)
+    public FfmpegCapabilityService(
+        IMediaEncoder mediaEncoder,
+        IConfigurationManager configurationManager,
+        ILogger<FfmpegCapabilityService> logger)
     {
         _mediaEncoder = mediaEncoder;
+        _configurationManager = configurationManager;
         _logger = logger;
     }
 
@@ -90,12 +97,7 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
     /// <returns>The detected capabilities, or <see langword="null"/> when ffmpeg could not be reached.</returns>
     private async Task<FfmpegCapabilities?> ProbeAsync(CancellationToken cancellationToken)
     {
-        var encoderPath = _mediaEncoder.EncoderPath;
-        if (string.IsNullOrEmpty(encoderPath))
-        {
-            _logger.LogWarning("No ffmpeg path is configured in Jellyfin; skipping the ffmpeg capability check");
-            return null;
-        }
+        var encoderPath = FfmpegPathResolver.Resolve(_mediaEncoder, _configurationManager);
 
         try
         {
@@ -129,7 +131,10 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or TimeoutException)
         {
-            _logger.LogWarning(ex, "Could not probe ffmpeg at {Path}; assuming it supports everything", encoderPath);
+            _logger.LogWarning(
+                ex,
+                "Could not run ffmpeg at {Path}; assuming it supports everything. Set the encoder path in Jellyfin's playback settings if this is wrong",
+                encoderPath);
             return null;
         }
     }

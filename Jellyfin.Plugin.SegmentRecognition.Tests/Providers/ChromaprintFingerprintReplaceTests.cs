@@ -47,7 +47,9 @@ public sealed class ChromaprintFingerprintReplaceTests : IDisposable
     private ChromaprintProvider CreateProvider(FfmpegChromaprintService? chromaprintService = null)
     {
         var chromaprint = chromaprintService
-            ?? new FfmpegChromaprintService(_mediaEncoder, NullLogger<FfmpegChromaprintService>.Instance);
+            ?? new FfmpegChromaprintService(
+                _mediaEncoder, Substitute.For<IConfigurationManager>(),
+                NullLogger<FfmpegChromaprintService>.Instance);
         var blackFrame = Substitute.ForPartsOf<FfmpegBlackFrameService>(
             Substitute.For<IMediaEncoder>(), Substitute.For<IConfigurationManager>(),
             NullLogger<FfmpegBlackFrameService>.Instance);
@@ -160,7 +162,8 @@ public sealed class ChromaprintFingerprintReplaceTests : IDisposable
     private FfmpegChromaprintService StubExtraction(byte[] result, Action? before = null)
     {
         var stub = Substitute.ForPartsOf<FfmpegChromaprintService>(
-            _mediaEncoder, NullLogger<FfmpegChromaprintService>.Instance);
+            _mediaEncoder, Substitute.For<IConfigurationManager>(),
+            NullLogger<FfmpegChromaprintService>.Instance);
 
         stub.Configure()
             .GenerateFingerprintAsync(

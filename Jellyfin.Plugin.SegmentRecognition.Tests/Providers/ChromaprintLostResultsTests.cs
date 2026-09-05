@@ -49,6 +49,7 @@ public sealed class ChromaprintLostResultsTests : IDisposable
     {
         var chromaprint = Substitute.ForPartsOf<FfmpegChromaprintService>(
             Substitute.For<IMediaEncoder>(),
+            Substitute.For<IConfigurationManager>(),
             NullLogger<FfmpegChromaprintService>.Instance);
 
         var blackFrame = Substitute.ForPartsOf<FfmpegBlackFrameService>(

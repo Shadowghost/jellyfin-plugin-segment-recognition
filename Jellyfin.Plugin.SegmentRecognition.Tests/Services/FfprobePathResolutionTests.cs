@@ -98,6 +98,23 @@ public sealed class FfprobePathResolutionTests
         Assert.DoesNotContain(probed, p => p.Contains("jellyfin-ffprobe/", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A bare executable name is resolved by the OS, not by us.
+    /// </summary>
+    /// <remarks>
+    /// This is what Jellyfin falls back to when no path was configured or validated. There is no
+    /// directory to look in, so testing for the file would report "not found" for an ffprobe that
+    /// is sitting on <c>$PATH</c> next to the ffmpeg that is about to be run.
+    /// </remarks>
+    [Theory]
+    [InlineData("ffmpeg", "ffprobe")]
+    [InlineData("ffmpeg.exe", "ffprobe.exe")]
+    [InlineData("jellyfin-ffmpeg", "jellyfin-ffprobe")]
+    public void BareExecutableName_IsLeftToPathResolution(string encoderPath, string expected)
+    {
+        Assert.Equal(expected, FfmpegChromaprintService.ResolveProbePath(encoderPath, Exists()));
+    }
+
     [Fact]
     public void ReturnsNullWhenNothingExists()
     {

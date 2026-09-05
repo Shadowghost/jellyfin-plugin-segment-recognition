@@ -43,7 +43,8 @@ public sealed class ChromaprintRetryCandidateTests : IDisposable
     private ChromaprintProvider CreateProvider()
     {
         var chromaprint = Substitute.ForPartsOf<FfmpegChromaprintService>(
-            Substitute.For<IMediaEncoder>(), NullLogger<FfmpegChromaprintService>.Instance);
+            Substitute.For<IMediaEncoder>(), Substitute.For<IConfigurationManager>(),
+            NullLogger<FfmpegChromaprintService>.Instance);
         var blackFrame = Substitute.ForPartsOf<FfmpegBlackFrameService>(
             Substitute.For<IMediaEncoder>(), Substitute.For<IConfigurationManager>(),
             NullLogger<FfmpegBlackFrameService>.Instance);
