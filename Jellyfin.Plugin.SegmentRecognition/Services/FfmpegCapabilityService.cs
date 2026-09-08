@@ -122,7 +122,7 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
                 .Contains("percentage of the pixels", StringComparison.OrdinalIgnoreCase);
 
             var capabilities = new FfmpegCapabilities(chromaprint, rawFingerprints, silenceDetect, blackFrame);
-            Report(capabilities, FirstLine(version), encoderPath);
+            Report(capabilities, FfmpegVersion(version), encoderPath);
             return capabilities;
         }
         catch (OperationCanceledException)
@@ -139,10 +139,31 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
         }
     }
 
-    private static string FirstLine(string output)
+    /// <summary>
+    /// Pulls the bare version out of ffmpeg's banner.
+    /// </summary>
+    /// <remarks>
+    /// The banner line reads "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg
+    /// developers"; only the version token says anything about the build, and carrying the rest
+    /// pushes the capability warnings past the width anyone reads a log at.
+    /// </remarks>
+    /// <param name="output">The output of <c>ffmpeg -version</c>.</param>
+    /// <returns>The version token, or the whole banner line when it is not shaped as expected.</returns>
+    private static string FfmpegVersion(string output)
     {
         var newline = output.IndexOf('\n', StringComparison.Ordinal);
-        return (newline < 0 ? output : output[..newline]).Trim();
+        var banner = (newline < 0 ? output : output[..newline]).Trim();
+
+        var words = banner.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < words.Length - 1; i++)
+        {
+            if (string.Equals(words[i], "version", StringComparison.OrdinalIgnoreCase))
+            {
+                return words[i + 1];
+            }
+        }
+
+        return banner;
     }
 
     private static async Task<string> RunAsync(string encoderPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
