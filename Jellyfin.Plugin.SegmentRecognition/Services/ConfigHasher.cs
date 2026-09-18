@@ -57,6 +57,13 @@ public static class ConfigHasher
     private const int ChromaprintFingerprintAlgoVersion = 1;
 
     /// <summary>
+    /// Version of the black-frame segment builder. Bump on any change to how stored frames become
+    /// segments. Unlike the fingerprint versions this is cheap: rebuilding needs the cached samples
+    /// only, never an ffmpeg scan.
+    /// </summary>
+    private const int BlackFrameSegmentAlgoVersion = 2;
+
+    /// <summary>
     /// The sample rate every fingerprint in the wild was generated at, back when the setting was
     /// not reachable from the configuration page. See <see cref="SampleRateFragment"/>.
     /// </summary>
@@ -206,7 +213,7 @@ public static class ConfigHasher
         ArgumentNullException.ThrowIfNull(config);
         var input = string.Create(
             CultureInfo.InvariantCulture,
-            $"bf-seg|mind={config.BlackFrameMinDurationMs}"
+            $"bf-seg|algo={BlackFrameSegmentAlgoVersion}|mind={config.BlackFrameMinDurationMs}"
             + $"|minI={config.MinIntroDurationSeconds}|maxI={config.MaxIntroDurationSeconds}"
             + $"|minO={config.MinOutroDurationSeconds}|maxO={config.MaxOutroDurationSeconds}|maxMO={config.MaxMovieOutroDurationSeconds}"
             + $"|iap={ChromaprintRegions.IntroFraction}|oas={config.OutroAnalysisSeconds}"
