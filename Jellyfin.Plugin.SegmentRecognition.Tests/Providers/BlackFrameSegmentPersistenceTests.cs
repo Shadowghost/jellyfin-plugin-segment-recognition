@@ -106,12 +106,12 @@ public sealed class BlackFrameSegmentPersistenceTests : IDisposable
     {
         _blackFrameService.DetectBlackFramesAsync(
                 Arg.Any<string>(), Arg.Any<double>(), Arg.Is<double>(s => s < 1.0), Arg.Any<double>(),
-                Arg.Any<(int, int, int, int)?>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                Arg.Any<(int, int, int, int)?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(intro);
 
         _blackFrameService.DetectBlackFramesAsync(
                 Arg.Any<string>(), Arg.Any<double>(), Arg.Is<double>(s => s >= 1.0), Arg.Any<double>(),
-                Arg.Any<(int, int, int, int)?>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                Arg.Any<(int, int, int, int)?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(outro);
 
         _blackFrameService.DetectCropAsync(
@@ -302,7 +302,7 @@ public sealed class BlackFrameSegmentPersistenceTests : IDisposable
 
         await _blackFrameService.DidNotReceive().DetectBlackFramesAsync(
             Arg.Any<string>(), Arg.Any<double>(), Arg.Any<double>(), Arg.Any<double>(),
-            Arg.Any<(int, int, int, int)?>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            Arg.Any<(int, int, int, int)?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
 
         using var db = _fixture.CreateContext();
         Assert.DoesNotContain(db.ChapterAnalysisResults, r => r.MatchedChapterName == "blackframe-intro");

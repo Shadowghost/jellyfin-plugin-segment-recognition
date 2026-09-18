@@ -168,11 +168,9 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        // Get the video stream for hardware acceleration eligibility and resolution
-        var videoStream = _mediaSourceManager.GetMediaStreams(itemId)
-            .FirstOrDefault(s => s.Type == MediaStreamType.Video);
-        var videoCodec = videoStream?.Codec;
-        var sourceHeight = videoStream?.Height ?? 0;
+        // Get the video stream for hardware acceleration eligibility
+        var videoCodec = _mediaSourceManager.GetMediaStreams(itemId)
+            .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.Codec;
 
         // Detect letterboxing (cached per item)
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -185,7 +183,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         var introScanSeconds = IntroScanSeconds(runtimeSeconds, config);
         sw.Restart();
         var introScan = await _blackFrameService.DetectBlackFramesAsync(
-            item.Path, 0, 0, introScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
+            item.Path, 0, 0, introScanSeconds, crop, videoCodec, cancellationToken).ConfigureAwait(false);
         var introTime = sw.Elapsed;
 
         // Scan outro region
@@ -193,7 +191,7 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         var outroScanSeconds = runtimeSeconds - outroStartSeconds;
         sw.Restart();
         var outroScan = await _blackFrameService.DetectBlackFramesAsync(
-            item.Path, 0, outroStartSeconds, outroScanSeconds, crop, sourceHeight, config.BlackFrameAnalysisHeight, videoCodec, cancellationToken).ConfigureAwait(false);
+            item.Path, 0, outroStartSeconds, outroScanSeconds, crop, videoCodec, cancellationToken).ConfigureAwait(false);
         var outroTime = sw.Elapsed;
 
         // Each region is normalized against its own distribution: an intro that opens on a bright

@@ -32,9 +32,10 @@ The scan is deliberately unfiltered. ffmpeg is asked to report *every* frame rat
 past a threshold, and the decision about what counts as black is made afterwards, where the whole
 distribution is visible.
 
-Frames are downscaled to **Analysis Resolution** (480p by default) first. Where hardware
-acceleration is available the decode and the downscale both happen on the GPU, which is most of the
-saving. See [Configuration](../configuration.md) for the hardware options.
+Frames are scanned at source resolution. Where hardware acceleration is available the decode
+happens on the GPU; a downscale before the scan was measured as a wash against native on both the
+CPU and GPU paths, because the decode dominates and `blackframe` itself is cheap. See
+[Configuration](../configuration.md) for the hardware options.
 
 How dark a single pixel must be to count as black is fixed, not a setting. It was once user-facing,
 defaulting to a value at which a dark episode reported nearly every frame as black.

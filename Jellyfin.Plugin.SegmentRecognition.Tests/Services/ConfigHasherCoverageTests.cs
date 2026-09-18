@@ -129,13 +129,13 @@ public sealed class ConfigHasherCoverageTests
     /// library-wide re-scan in production.
     /// </summary>
     [Theory]
-    [InlineData(720)]
-    [InlineData(0)]
-    public void BlackFrameExtractionHash_IgnoresExtractionSettings(int analysisHeight)
+    [InlineData(70)]
+    [InlineData(95)]
+    public void BlackFrameExtractionHash_IgnoresExtractionSettings(int minimumPercentage)
     {
         Assert.Equal(
             ConfigHasher.BlackFrameExtraction(new PluginConfiguration()),
-            ConfigHasher.BlackFrameExtraction(new PluginConfiguration { BlackFrameAnalysisHeight = analysisHeight }));
+            ConfigHasher.BlackFrameExtraction(new PluginConfiguration { BlackFrameMinimumPercentage = minimumPercentage }));
     }
 
     [Fact]
