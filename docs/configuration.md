@@ -56,6 +56,11 @@ Widening **Outro Analysis Seconds** recomputes segments from the frames already 
 scanned over the old, narrower region. To actually scan the wider region on items already analyzed,
 use **Re-analyze Black Frames**.
 
+It also bounds black-frame outros: a black-frame outro can never be longer than the region that was
+scanned for it, so at the 240 s default the 600 s and 900 s outro maxima above are only reachable by
+chapter names and fingerprinting. Movie credits routinely run past 240 s, so widening this is the
+knob for them - at a proportional cost in scan time, which is why it is not raised by default.
+
 ## Black frame
 
 | Setting | Default | Effect | On change |

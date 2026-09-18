@@ -315,7 +315,7 @@
                                     <div class="inputContainer">
                                         <label class="inputLabel" for="txtOutroAnalysisSeconds">Outro Analysis Region (seconds)</label>
                                         <input id="txtOutroAnalysisSeconds" type="number" is="emby-input" min="30" step="10" />
-                                        <div class="fieldDescription">Duration from the end of the episode to scan for outro detection (default: 240s).</div>
+                                        <div class="fieldDescription">Duration from the end of the episode to scan for outro detection (default: 240s). This also caps how long a black-frame outro can be: raising Max Outro past this only affects chapter-name and fingerprint results until this is widened too.</div>
                                     </div>
                                 </fieldset>
 
