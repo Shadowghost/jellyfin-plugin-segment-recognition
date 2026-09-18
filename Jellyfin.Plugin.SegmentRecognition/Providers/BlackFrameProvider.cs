@@ -28,6 +28,17 @@ namespace Jellyfin.Plugin.SegmentRecognition.Providers;
 /// </summary>
 public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
 {
+    /// <summary>
+    /// Gap between two black stretches that still counts as one credit run. Sized for the
+    /// interruptions credits contain - a distributor logo, a localisation slate.
+    /// </summary>
+    internal const double DenseRegionMergeGapSeconds = 20;
+
+    /// <summary>
+    /// Fraction of a candidate region that has to be black for it to read as roll credits.
+    /// </summary>
+    internal const double DenseRegionMinimumCoverage = 0.50;
+
     private readonly FfmpegBlackFrameService _blackFrameService;
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
@@ -357,7 +368,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             });
         }
 
-        var outroSegment = FindBestOutroCluster(itemId, ClusterFrames(outroFrames, minClusterTicks), runtimeTicks, config, item is Movie);
+        var outroSegment = FindBestOutroCluster(
+            itemId,
+            ClusterFrames(outroFrames, minClusterTicks),
+            runtimeTicks,
+            config,
+            item is Movie,
+            [.. outroFrames.Select(f => f.TimestampTicks)]);
         if (outroSegment is not null)
         {
             var (outroRefinedStart, outroRefinedEnd) = await _refinementPipeline.RefineAsync(
@@ -568,15 +585,37 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
         List<(long Start, long End)> clusters,
         long runtimeTicks,
         PluginConfiguration config,
-        bool isMovie = false)
+        bool isMovie = false,
+        IReadOnlyList<long>? blackTicks = null)
     {
         var minOutroTicks = config.MinOutroDurationSeconds * TimeSpan.TicksPerSecond;
         var maxOutro = isMovie ? config.MaxMovieOutroDurationSeconds : config.MaxOutroDurationSeconds;
         var maxOutroTicks = maxOutro * TimeSpan.TicksPerSecond;
 
+        // Roll credits are a sustained black region, not a fade, and beat the cluster scan below:
+        // interruptions break the credits into pieces, and that scan then keeps the last piece,
+        // starting the outro well inside the credits rather than at them.
+        var denseStart = FindDenseBlackRegionStart(blackTicks, runtimeTicks, config);
+        if (denseStart is not null)
+        {
+            var denseFromEnd = runtimeTicks - denseStart.Value;
+            if (denseFromEnd >= minOutroTicks && denseFromEnd <= maxOutroTicks)
+            {
+                return new MediaSegmentDto
+                {
+                    ItemId = itemId,
+                    Type = MediaSegmentType.Outro,
+                    StartTicks = denseStart.Value,
+                    EndTicks = runtimeTicks
+                };
+            }
+        }
+
         // Clusters are ordered by start-ticks ascending. Keep the last one that
         // still satisfies the outro window so we pick the latest fade-to-black that
         // isn't too close to the very end. Mirrors the logic in FindBestIntroCluster.
+        // Credits that are not black at all - an ending over artwork - have no sustained region,
+        // only the fade that leads into them, so this stays the fallback.
         (long Start, long End)? bestCluster = null;
         foreach (var cluster in clusters)
         {
@@ -599,6 +638,98 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             StartTicks = bestCluster.Value.Start,
             EndTicks = runtimeTicks
         };
+    }
+
+    /// <summary>
+    /// Finds where the latest sustained run of black frames in the outro scan region begins.
+    /// </summary>
+    /// <remarks>
+    /// Only the frames that counted as black are stored, so coverage cannot be measured against a
+    /// total frame count. The interval is recovered from the black frames instead - inside a black
+    /// stretch they are consecutive, so the smallest gaps present are the frame interval - which is
+    /// what makes the analysis pass and a rebuild from cache agree.
+    /// </remarks>
+    /// <param name="blackTicks">Timestamps of the frames that counted as black, or null when unavailable.</param>
+    /// <param name="runtimeTicks">The item runtime.</param>
+    /// <param name="config">The plugin configuration.</param>
+    /// <returns>The start of the latest qualifying region, or null when there is none.</returns>
+    internal static long? FindDenseBlackRegionStart(
+        IReadOnlyList<long>? blackTicks,
+        long runtimeTicks,
+        PluginConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (blackTicks is null)
+        {
+            return null;
+        }
+
+        var runtimeSeconds = runtimeTicks / (double)TimeSpan.TicksPerSecond;
+        var regionStartTicks = (long)(OutroScanStartSeconds(runtimeSeconds, config) * TimeSpan.TicksPerSecond);
+        var ticks = blackTicks.Where(t => t >= regionStartTicks).Order().ToList();
+
+        if (ticks.Count < 3)
+        {
+            return null;
+        }
+
+        var gaps = new List<long>(ticks.Count - 1);
+        for (var i = 1; i < ticks.Count; i++)
+        {
+            gaps.Add(ticks[i] - ticks[i - 1]);
+        }
+
+        gaps.Sort();
+
+        // Only the lower half is in-stretch spacing; the jumps between stretches would drag a
+        // plain median up towards a scene length.
+        var sampleCount = Math.Max(3, gaps.Count / 2);
+        var stepTicks = gaps[Math.Min(sampleCount, gaps.Count) / 2];
+        if (stepTicks <= 0)
+        {
+            return null;
+        }
+
+        var mergeGapTicks = (long)(DenseRegionMergeGapSeconds * TimeSpan.TicksPerSecond);
+        var minDurationTicks = config.MinOutroDurationSeconds * TimeSpan.TicksPerSecond;
+
+        long? best = null;
+        var runStart = ticks[0];
+        var runEnd = ticks[0];
+        var runCount = 1;
+
+        void Consider(long start, long end, int count)
+        {
+            if (end - start < minDurationTicks)
+            {
+                return;
+            }
+
+            if (count * (double)stepTicks / (end - start) < DenseRegionMinimumCoverage)
+            {
+                return;
+            }
+
+            best = start;
+        }
+
+        for (var i = 1; i < ticks.Count; i++)
+        {
+            if (ticks[i] - runEnd <= mergeGapTicks)
+            {
+                runEnd = ticks[i];
+                runCount++;
+                continue;
+            }
+
+            Consider(runStart, runEnd, runCount);
+            runStart = ticks[i];
+            runEnd = ticks[i];
+            runCount = 1;
+        }
+
+        Consider(runStart, runEnd, runCount);
+        return best;
     }
 
     private async Task<IReadOnlyList<MediaSegmentDto>> BuildSegmentsFromCachedFrames(
@@ -635,7 +766,13 @@ public class BlackFrameProvider : IMediaSegmentProvider, IHasOrder
             segments.Add(introSegment);
         }
 
-        var outroSegment = FindBestOutroCluster(itemId, allClusters, runtimeTicks, config, item is Movie);
+        var outroSegment = FindBestOutroCluster(
+            itemId,
+            allClusters,
+            runtimeTicks,
+            config,
+            item is Movie,
+            [.. frames.Select(f => f.TimestampTicks)]);
         if (outroSegment is not null)
         {
             segments.Add(outroSegment);

@@ -62,9 +62,17 @@ Consecutive black frames within a second of each other form one cluster. Cluster
 
 - **Intro:** the last cluster that ends within the intro duration window. The segment runs from the
   start of the file to the end of that cluster.
-- **Outro:** the last cluster whose distance from the end of the file fits the outro window. The
-  segment runs from the start of that cluster to the end of the file. Movies use their own, longer
-  maximum.
+- **Outro:** two passes, in order.
+  1. Roll credits are a sustained black region, so a run of black frames covering at least half of
+     its own span and lasting at least the minimum outro is taken as the credits, starting where
+     the run does. Interruptions up to 20 s - a distributor logo, a localisation slate - are
+     bridged rather than treated as boundaries. Without that the scan sees only the individual
+     black stretches and starts the outro at the last one, well inside the credits.
+  2. Credits that are not black at all, such as an ending over artwork, produce no such region.
+     The fallback is the last cluster whose distance from the end of the file fits the outro
+     window: the transition into the credits, found without ever seeing the credits themselves.
+
+  Either way the segment runs to the end of the file, and movies use their own, longer maximum.
 
 Taking the last qualifying cluster means the latest fade that is still plausible, rather than the
 first dark moment in the file.
