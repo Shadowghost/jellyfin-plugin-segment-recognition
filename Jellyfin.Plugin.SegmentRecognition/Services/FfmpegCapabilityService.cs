@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -22,11 +23,15 @@ namespace Jellyfin.Plugin.SegmentRecognition.Services;
 public sealed class FfmpegCapabilityService : IHostedService, IDisposable
 {
     private static readonly TimeSpan _probeTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan _startupPollInterval = TimeSpan.FromSeconds(1);
 
     private readonly SemaphoreSlim _probeLock = new(1, 1);
+    private readonly CancellationTokenSource _stopping = new();
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IConfigurationManager _configurationManager;
+    private readonly IServerApplicationHost _applicationHost;
     private readonly ILogger<FfmpegCapabilityService> _logger;
+    private Task? _startupProbe;
     private FfmpegCapabilities? _probed;
 
     /// <summary>
@@ -34,14 +39,17 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
     /// </summary>
     /// <param name="mediaEncoder">The media encoder, for the ffmpeg path Jellyfin validated.</param>
     /// <param name="configurationManager">The configuration manager, for the configured path.</param>
+    /// <param name="applicationHost">The application host, for when the server has resolved ffmpeg.</param>
     /// <param name="logger">The logger.</param>
     public FfmpegCapabilityService(
         IMediaEncoder mediaEncoder,
         IConfigurationManager configurationManager,
+        IServerApplicationHost applicationHost,
         ILogger<FfmpegCapabilityService> logger)
     {
         _mediaEncoder = mediaEncoder;
         _configurationManager = configurationManager;
+        _applicationHost = applicationHost;
         _logger = logger;
     }
 
@@ -56,13 +64,36 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
     public FfmpegCapabilities Capabilities => _probed ?? FfmpegCapabilities.Unknown;
 
     /// <inheritdoc />
-    public Task StartAsync(CancellationToken cancellationToken) => GetAsync(cancellationToken);
+    /// <remarks>
+    /// Hosted services start before the server resolves ffmpeg at all - it does that in its own
+    /// startup tasks, once the host is already up - so probing here reads an encoder path that is
+    /// still unset and falls back to the bare executable name, which fails outright on a service
+    /// whose <c>$PATH</c> does not carry ffmpeg. The probe waits for core startup instead, off the
+    /// startup path so it never delays the server.
+    /// </remarks>
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _startupProbe = Task.Run(() => ProbeAfterStartupAsync(_stopping.Token), CancellationToken.None);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync().ConfigureAwait(false);
+
+        if (_startupProbe is not null)
+        {
+            await _startupProbe.ConfigureAwait(false);
+        }
+    }
 
     /// <inheritdoc />
-    public void Dispose() => _probeLock.Dispose();
+    public void Dispose()
+    {
+        _stopping.Dispose();
+        _probeLock.Dispose();
+    }
 
     /// <summary>
     /// Returns the probe result, running the probe the first time it is asked for.
@@ -87,6 +118,27 @@ public sealed class FfmpegCapabilityService : IHostedService, IDisposable
         finally
         {
             _probeLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Waits for the server to finish resolving ffmpeg, then runs the startup probe.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes once the probe has run or the server is stopping.</returns>
+    private async Task ProbeAfterStartupAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!_applicationHost.CoreStartupHasCompleted)
+            {
+                await Task.Delay(_startupPollInterval, cancellationToken).ConfigureAwait(false);
+            }
+
+            await GetAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
