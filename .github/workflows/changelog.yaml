@@ -18,7 +18,17 @@ on:
       - update-prep-command
 
 jobs:
+  autolabel:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: release-drafter/release-drafter/autolabeler@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+
   changelog:
+    if: github.event_name != 'pull_request_target'
     uses: jellyfin/jellyfin-meta-plugins/.github/workflows/changelog.yaml@master
     with:
       repository-name: Shadowghost/jellyfin-plugin-segment-recognition
