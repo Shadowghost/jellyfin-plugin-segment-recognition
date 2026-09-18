@@ -60,7 +60,6 @@ use **Re-analyze Black Frames**.
 
 | Setting | Default | Effect | On change |
 | --- | --- | --- | --- |
-| Analysis Resolution | 480p | Frames are downscaled to this height before scanning. 480p, 720p or native | New items only |
 | Black Pixels Per Frame | 85% | How much of a frame must be black, normalized against how dark the scan is | New items only |
 | Minimum Cluster Duration | 500 ms | Shortest run of black frames that counts as a transition | Recomputes |
 | Re-analyze Black Frames | Off | One-shot: clear every cached frame and scan again | Re-runs everything |

@@ -83,9 +83,9 @@ The defaults are sensible; the settings worth knowing are:
 - **Providers**: which detection methods run, with the defaults listed above.
 - **Duration limits**: how long a segment of each type is allowed to be, so unrelated matches get
   rejected.
-- **Black frame**: analysis resolution, how dark a frame counts as black, and minimum length of a
-  black run. Because this setting decides what gets stored, use **Re-analyze Black Frames** to apply
-  a change to already-scanned items.
+- **Black frame**: how dark a frame counts as black, and minimum length of a black run. Because
+  these settings decide what gets stored, use **Re-analyze Black Frames** to apply a change to
+  already-scanned items.
 - **Refinement**: silence, chapter and keyframe snapping, all on by default.
 - **Chapter names**: the name lists used for chapter matching.
 

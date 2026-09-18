@@ -447,15 +447,6 @@
 
                                 <fieldset class="verticalSection">
                                     <legend>Black Frame Settings</legend>
-                                    <div class="selectContainer">
-                                        <label class="selectLabel" for="selBlackFrameAnalysisHeight">Analysis Resolution</label>
-                                        <select id="selBlackFrameAnalysisHeight" is="emby-select">
-                                            <option value="480">480p (default, fastest)</option>
-                                            <option value="720">720p</option>
-                                            <option value="0">Native (no downscaling)</option>
-                                        </select>
-                                        <div class="fieldDescription">Frames are downscaled to this height before analysis. Lower = faster. Uses GPU-side scaling when hardware acceleration is available.</div>
-                                    </div>
                                     <div class="inputContainer">
                                         <label class="inputLabel" for="txtBlackFrameMinimumPercentage">Black Pixels Per Frame (%)</label>
                                         <input id="txtBlackFrameMinimumPercentage" type="number" is="emby-input" min="1" max="100" step="1" />
@@ -760,7 +751,6 @@
                         document.getElementById('chkEnableSeasonOutlierPruning').checked = config.EnableSeasonOutlierPruning;
                         document.getElementById('txtMinPreviewDuration').value = config.MinPreviewDurationSeconds;
                         document.getElementById('txtMaxPreviewDuration').value = config.MaxPreviewDurationSeconds;
-                        document.getElementById('selBlackFrameAnalysisHeight').value = config.BlackFrameAnalysisHeight;
                         document.getElementById('chkReanalyzeBlackFrames').checked = config.ReanalyzeBlackFrames;
                         document.getElementById('txtMinIntroDuration').value = config.MinIntroDurationSeconds;
                         document.getElementById('txtMaxIntroDuration').value = config.MaxIntroDurationSeconds;
@@ -825,7 +815,6 @@
                         config.EnableSeasonOutlierPruning = document.getElementById('chkEnableSeasonOutlierPruning').checked;
                         config.MinPreviewDurationSeconds = parseInt(document.getElementById('txtMinPreviewDuration').value, 10);
                         config.MaxPreviewDurationSeconds = parseInt(document.getElementById('txtMaxPreviewDuration').value, 10);
-                        config.BlackFrameAnalysisHeight = parseInt(document.getElementById('selBlackFrameAnalysisHeight').value, 10);
                         config.ReanalyzeBlackFrames = document.getElementById('chkReanalyzeBlackFrames').checked;
                         config.MinIntroDurationSeconds = parseInt(document.getElementById('txtMinIntroDuration').value, 10);
                         config.MaxIntroDurationSeconds = parseInt(document.getElementById('txtMaxIntroDuration').value, 10);

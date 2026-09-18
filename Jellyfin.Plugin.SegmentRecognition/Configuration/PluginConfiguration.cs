@@ -48,13 +48,6 @@ public class PluginConfiguration : BasePluginConfiguration
     public int BlackFrameMinDurationMs { get; set; } = 500;
 
     /// <summary>
-    /// Gets or sets the downscale resolution height for black frame analysis.
-    /// Frames are scaled to this height on the GPU before analysis to reduce CPU work.
-    /// Valid values: 0 (no scaling), 480, 720. Default is 480.
-    /// </summary>
-    public int BlackFrameAnalysisHeight { get; set; } = 480;
-
-    /// <summary>
     /// Gets or sets the chapter name regex patterns that indicate an intro segment.
     /// </summary>
 #pragma warning disable CA1819 // Properties should not return arrays - required for XML serialization

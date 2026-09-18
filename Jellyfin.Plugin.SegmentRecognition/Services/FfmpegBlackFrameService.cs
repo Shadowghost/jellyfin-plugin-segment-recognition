@@ -83,7 +83,6 @@ public partial class FfmpegBlackFrameService
 
         var stderr = await RunFfmpegWithHwFallbackAsync(
             videoCodec,
-            0,
             (hwArgs, filterPrefix) =>
             {
                 var args = new List<string>(hwArgs)
@@ -156,8 +155,6 @@ public partial class FfmpegBlackFrameService
     /// <param name="startSeconds">Start time in seconds to begin scanning.</param>
     /// <param name="durationSeconds">Duration in seconds to scan.</param>
     /// <param name="crop">Optional crop rectangle to apply before black frame detection (excludes letterbox bars).</param>
-    /// <param name="sourceHeight">The source video height in pixels, used to skip downscaling when already at or below analysis resolution.</param>
-    /// <param name="analysisHeight">Target height for downscaling (0 to disable). Frames are scaled to this height before the blackframe filter.</param>
     /// <param name="videoCodec">The video codec name (e.g. "h264", "hevc") for hardware acceleration eligibility.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of detected black frames with timestamp and black percentage.</returns>
@@ -167,51 +164,25 @@ public partial class FfmpegBlackFrameService
         double startSeconds,
         double durationSeconds,
         (int Width, int Height, int X, int Y)? crop,
-        int sourceHeight,
-        int analysisHeight,
         string? videoCodec,
         CancellationToken cancellationToken)
     {
-        // Always use GPU scale when possible - even with crop. When crop is needed, we scale
-        // the crop coordinates proportionally to match the GPU-scaled resolution, then apply
-        // crop on CPU after hwdownload. This is much faster than downloading full-resolution
-        // frames: e.g. for 4K with letterboxing, hwdownload transfers 853x480 instead of 3840x2160.
-        var needsScale = analysisHeight > 0 && sourceHeight > analysisHeight;
-        var gpuScaleHeight = needsScale ? analysisHeight : 0;
-
-        // Pre-compute scaled crop coordinates for use inside the lambda
-        (int Width, int Height, int X, int Y)? scaledCrop = null;
-        if (crop.HasValue && needsScale)
-        {
-            var ratio = analysisHeight / (double)sourceHeight;
-            scaledCrop = (
-                (int)Math.Round(crop.Value.Width * ratio),
-                (int)Math.Round(crop.Value.Height * ratio),
-                (int)Math.Round(crop.Value.X * ratio),
-                (int)Math.Round(crop.Value.Y * ratio));
-        }
-        else if (crop.HasValue)
-        {
-            scaledCrop = crop;
-        }
-
         var stderr = await RunFfmpegWithHwFallbackAsync(
             videoCodec,
-            gpuScaleHeight,
             (hwArgs, hwFilterPrefix) =>
             {
                 var filterChain = new StringBuilder();
                 filterChain.Append(hwFilterPrefix);
 
-                if (scaledCrop.HasValue)
+                if (crop.HasValue)
                 {
                     filterChain.AppendFormat(
                         CultureInfo.InvariantCulture,
                         "crop={0}:{1}:{2}:{3},",
-                        scaledCrop.Value.Width,
-                        scaledCrop.Value.Height,
-                        scaledCrop.Value.X,
-                        scaledCrop.Value.Y);
+                        crop.Value.Width,
+                        crop.Value.Height,
+                        crop.Value.X,
+                        crop.Value.Y);
                 }
 
                 filterChain.AppendFormat(
@@ -264,18 +235,15 @@ public partial class FfmpegBlackFrameService
     /// device selection. Returns an empty arg list and prefix if no hardware acceleration is available.
     /// </summary>
     /// <param name="videoCodec">The video codec of the input file (e.g. "h264", "hevc").</param>
-    /// <param name="scaleHeight">Optional target height for GPU-side scaling. When set and the source is taller,
-    /// frames are scaled on the GPU before hwdownload, significantly reducing CPU work for downstream filters.
-    /// Pass 0 to disable scaling (e.g. for cropdetect which needs full resolution).</param>
     /// <returns>A tuple of (hwaccel args to prepend before input, filter prefix to prepend before video filters).</returns>
-    private (IReadOnlyList<string> HwArgs, string FilterPrefix) GetHwAccelArgs(string? videoCodec, int scaleHeight = 0)
+    private (IReadOnlyList<string> HwArgs, string FilterPrefix) GetHwAccelArgs(string? videoCodec)
     {
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var hwType = encodingOptions.HardwareAccelerationType;
 
         if (hwType == HardwareAccelerationType.none)
         {
-            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), string.Empty);
         }
 
         // Respect the user's configured hardware decoding codec list
@@ -288,7 +256,7 @@ public partial class FfmpegBlackFrameService
             _logger.LogDebug(
                 "Video codec {Codec} is not in the hardware decoding codec list, falling back to software decoding",
                 videoCodec);
-            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), string.Empty);
         }
 
         // Map hw type to ffmpeg hwaccel name for SupportsHwaccel check
@@ -304,7 +272,7 @@ public partial class FfmpegBlackFrameService
         if (hwaccelName is null || !_mediaEncoder.SupportsHwaccel(hwaccelName))
         {
             _logger.LogDebug("Hardware acceleration {HwType} is not supported by ffmpeg, falling back to software decoding", hwType);
-            return (Array.Empty<string>(), GetSoftwareFilterPrefix(scaleHeight));
+            return (Array.Empty<string>(), string.Empty);
         }
 
         var vaapiDevice = encodingOptions.VaapiDevice;
@@ -364,52 +332,20 @@ public partial class FfmpegBlackFrameService
             _ => []
         };
 
-        // Build the filter prefix: GPU-side scale (optional) → hwdownload → format.
-        // The scale happens on the GPU before hwdownload so the CPU only sees small frames.
         // hwdownload is always needed because blackframe/cropdetect are CPU-only filters.
-        var filterPrefix = (hwType, scaleHeight > 0) switch
+        // Frames are downloaded at source resolution. A GPU-side downscale ahead of hwdownload
+        // measured as a wash on both the CPU and nvenc paths - decode dominates - while making the
+        // luma cutoff depend on the scaler.
+        var filterPrefix = hwType switch
         {
-            (HardwareAccelerationType.qsv, true) => string.Format(
-                CultureInfo.InvariantCulture,
-                "vpp_qsv=h={0}:w=-1:format=nv12,hwdownload,format=nv12,",
-                scaleHeight),
-            (HardwareAccelerationType.qsv, false) =>
-                "vpp_qsv=format=nv12,hwdownload,format=nv12,",
-
-            (HardwareAccelerationType.vaapi, true) => string.Format(
-                CultureInfo.InvariantCulture,
-                "scale_vaapi=h={0}:w=-2:format=nv12,hwdownload,format=nv12,",
-                scaleHeight),
-            (HardwareAccelerationType.vaapi, false) =>
-                "hwdownload,format=nv12,",
-
-            (HardwareAccelerationType.nvenc, true) => string.Format(
-                CultureInfo.InvariantCulture,
-                "scale_cuda=-2:{0}:format=nv12,hwdownload,format=nv12,",
-                scaleHeight),
-            (HardwareAccelerationType.nvenc, false) =>
-                "hwdownload,format=nv12,",
-
-            (HardwareAccelerationType.videotoolbox, true) => string.Format(
-                CultureInfo.InvariantCulture,
-                "scale_vt=h={0}:w=-2,hwdownload,format=nv12,",
-                scaleHeight),
-            (HardwareAccelerationType.videotoolbox, false) =>
-                "hwdownload,format=nv12,",
+            HardwareAccelerationType.qsv => "vpp_qsv=format=nv12,hwdownload,format=nv12,",
+            HardwareAccelerationType.vaapi => "hwdownload,format=nv12,",
+            HardwareAccelerationType.nvenc => "hwdownload,format=nv12,",
+            HardwareAccelerationType.videotoolbox => "hwdownload,format=nv12,",
             _ => string.Empty
         };
 
         return (hwArgs, filterPrefix);
-    }
-
-    /// <summary>
-    /// Returns the CPU-side filter prefix for software decoding (no hardware acceleration).
-    /// </summary>
-    private static string GetSoftwareFilterPrefix(int scaleHeight)
-    {
-        return scaleHeight > 0
-            ? string.Format(CultureInfo.InvariantCulture, "scale=-2:{0},", scaleHeight)
-            : string.Empty;
     }
 
     /// <summary>
@@ -419,18 +355,16 @@ public partial class FfmpegBlackFrameService
     /// callers do not silently treat a failed run as "no results found".
     /// </summary>
     /// <param name="videoCodec">The video codec name for hardware acceleration eligibility.</param>
-    /// <param name="scaleHeight">Optional GPU-side scale height (0 to disable). Passed to <see cref="GetHwAccelArgs"/>.</param>
     /// <param name="buildArgs">A function that takes (hwArgs, filterPrefix) and returns the full ffmpeg argument list.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The stderr output from the successful ffmpeg run.</returns>
     /// <exception cref="InvalidOperationException">Thrown when ffmpeg fails after all retry attempts.</exception>
     private async Task<string> RunFfmpegWithHwFallbackAsync(
         string? videoCodec,
-        int scaleHeight,
         Func<IReadOnlyList<string>, string, IReadOnlyList<string>> buildArgs,
         CancellationToken cancellationToken)
     {
-        var (hwArgs, filterPrefix) = GetHwAccelArgs(videoCodec, scaleHeight);
+        var (hwArgs, filterPrefix) = GetHwAccelArgs(videoCodec);
         var args = buildArgs(hwArgs, filterPrefix);
 
         var (stderr, exitCode) = await RunFfmpegAsync(args, cancellationToken).ConfigureAwait(false);
@@ -438,7 +372,7 @@ public partial class FfmpegBlackFrameService
         if (exitCode != 0 && hwArgs.Count > 0)
         {
             _logger.LogWarning("Hardware-accelerated ffmpeg failed (exit code {ExitCode}), retrying with software decoding", exitCode);
-            args = buildArgs([], GetSoftwareFilterPrefix(scaleHeight));
+            args = buildArgs([], string.Empty);
             (stderr, exitCode) = await RunFfmpegAsync(args, cancellationToken).ConfigureAwait(false);
         }
 
