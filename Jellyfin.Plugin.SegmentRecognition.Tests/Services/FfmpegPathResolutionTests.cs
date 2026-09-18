@@ -29,6 +29,23 @@ public sealed class FfmpegPathResolutionTests
     }
 
     /// <summary>
+    /// The path Jellyfin last validated beats the one typed into settings: hosted services start
+    /// before the server resolves ffmpeg, and a --ffmpeg switch never reaches EncoderAppPath at all.
+    /// </summary>
+    [Fact]
+    public void LastValidatedPathBeatsTheConfiguredOne()
+    {
+        var encoder = Substitute.For<IMediaEncoder>();
+        encoder.EncoderPath.Returns(string.Empty);
+
+        Assert.Equal(
+            "/usr/lib/jellyfin-ffmpeg/ffmpeg",
+            FfmpegPathResolver.Resolve(
+                encoder,
+                WithPaths("/usr/share/jellyfin-ffmpeg/ffmpeg", "/usr/lib/jellyfin-ffmpeg/ffmpeg")));
+    }
+
+    /// <summary>
     /// The configured path is what Jellyfin would have validated, so it is the next best thing.
     /// </summary>
     [Fact]
@@ -69,9 +86,16 @@ public sealed class FfmpegPathResolutionTests
     }
 
     private static IConfigurationManager WithConfiguredPath(string encoderAppPath)
+        => WithPaths(encoderAppPath, string.Empty);
+
+    private static IConfigurationManager WithPaths(string encoderAppPath, string encoderAppPathDisplay)
     {
         var configurationManager = Substitute.For<IConfigurationManager>();
-        configurationManager.GetConfiguration("encoding").Returns(new EncodingOptions { EncoderAppPath = encoderAppPath });
+        configurationManager.GetConfiguration("encoding").Returns(new EncodingOptions
+        {
+            EncoderAppPath = encoderAppPath,
+            EncoderAppPathDisplay = encoderAppPathDisplay
+        });
         return configurationManager;
     }
 }
